@@ -3,6 +3,7 @@ use core::mem::MaybeUninit;
 
 use alloc::boxed::Box;
 use wdk::nt_success;
+use wdk_sys::ntddk::ObfDereferenceObject;
 use wdk_sys::{
     _KWAIT_REASON::Executive,
     _MODE::KernelMode,
@@ -74,9 +75,7 @@ impl JoinHandle {
             )
         };
 
-        if !nt_success(status) {
-            return Err(status.into());
-        }
+        cvt(status)?;
 
         status = unsafe {
             KeWaitForSingleObject(
@@ -88,9 +87,9 @@ impl JoinHandle {
             )
         };
 
-        if status != STATUS_SUCCESS {
-            return Err(status.into());
-        }
+        cvt(status)?;
+
+        unsafe { ObfDereferenceObject(thread) };
 
         // unconditionally set self.exit_status no matter a wait failure or a query failure occurrs
         let mut length: ULONG = 0;
