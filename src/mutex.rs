@@ -1,8 +1,9 @@
 use crate::ntstatus::NtError;
+use alloc::boxed::Box;
 use core::{
     cell::UnsafeCell,
     fmt::{Debug, Display},
-    mem,
+    mem::{self, MaybeUninit},
     ops::{Deref, DerefMut},
     ptr::{NonNull, drop_in_place},
 };
@@ -34,6 +35,7 @@ fn ExInitializeFastMutex(fast_mutex: *mut FAST_MUTEX) {
 }
 
 // out of fashion api collections
+// TODO: move it out of this module
 mod otf {
     use super::*;
 
@@ -482,6 +484,33 @@ impl<'a, T, M: QueuedMutex> Drop for InStackMutexGuard<'a, T, M> {
                 .mutex
                 .unlock(&mut self.handle.0);
         }
+    }
+}
+
+/// for convenient usage in where we needs to use the lock standalone
+/// 
+/// ***For example:***</br>
+/// here is some struct
+/// ```
+/// struct Test {
+///     a: u32,
+///     b: u64
+///     // mutex is only used to protect access of member `b`
+///     mutex: Box<FastMutex>
+/// }
+/// 
+/// let test = Box::new(Test{ a: 0, b: 0, FastMutex::create() });
+/// // ... then use test across multi threads
+/// ```
+pub trait MutexNew<T: Mutex> {
+    fn create() -> Box<T>;
+}
+
+impl<T: Mutex<Target = T>> MutexNew<T> for T {
+    fn create() -> Box<T> {
+        let mut this = Box::new(unsafe { MaybeUninit::<Self>::zeroed().assume_init() });
+        T::init(this.as_mut());
+        this
     }
 }
 

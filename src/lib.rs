@@ -211,4 +211,18 @@ pub mod test {
         // check the shared counter
         println!("the final value of shared counter is: {:?}", shared_counter);
     }
+
+    pub fn test_standalone_locks() {
+        let mutex = FastMutex::create();
+
+        let mut counter = 0u32;
+
+        mutex.lock();
+
+        counter += 1;
+
+        mutex.unlock();
+
+        println!("counter = {}", counter);
+    }
 }
