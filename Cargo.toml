@@ -1,0 +1,27 @@
+[package]
+name = "ksync"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.wdk.driver-model]
+driver-type = "WDM"
+
+[dependencies]
+wdk = "0.3.0"
+wdk-alloc = "0.3.0"
+wdk-panic = "0.3.0"
+wdk-sys = "0.3.0"
+
+[features]
+nightly = ["wdk/nightly", "wdk-sys/nightly"]
+
+[build-dependencies]
+wdk-build = "0.3.0"
+
+[profile.dev]
+panic = "abort"
+debug = true
+
+[profile.release]
+panic = "abort"
+lto = true
