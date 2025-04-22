@@ -514,6 +514,9 @@ impl<T: Mutex<Target = T>> MutexNew<T> for T {
     }
 }
 
+unsafe impl<T, M: Mutex> Sync for Locked<T, M> {}
+unsafe impl<T, M: QueuedMutex> Sync for StackQueueLocked<T, M> {}
+
 pub type GuardLocked<T> = Locked<T, GuardedMutex>;
 pub type FastLocked<T> = Locked<T, FastMutex>;
 pub type ResouceLocked<T> = Locked<T, ResourceMutex>;
