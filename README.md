@@ -1,24 +1,36 @@
 # ksync
 rust wrappers for kernel mode thread, FastMutex, GuardMutex, Resources and Queued Spin Locks
 # Features
+## Threads
 ```
-// create a joinable system thread(get current thread id) using mod thread
+// create a joinable system thread
 thread::spawn()
 
+// sleeping
+thread::this_thread::sleep()
+
+// get thread id
+thread::this_thread::id()
+
+// yielding
+thread::this_thread::pause()
+```
+## Mutexs
+```
 // a wrapper for Guarded Mutex
-pub type GuardLocked<T> = Locked<T, GuardedMutex>;
+mutex::GuardLocked<T>
 
 // a wrapper for Fast Mutex
-pub type FastLocked<T> = Locked<T, FastMutex>;
+mutex::FastLocked<T>
 
 // a wrapper for ERESOURCE
-pub type ResouceLocked<T> = Locked<T, ResourceMutex>;
+mutex::ResouceLocked<T>
 
 // a wrapper for Spinlocks
-pub type SpinLocked<T> = Locked<T, SpinMutex>;
+mutex::SpinLocked<T>
 
 // a wrapper for Queued Stack Spinlocks
-pub type InStackQueueLocked<T> = StackQueueLocked<T, QueuedSpinMutex>;
+mutex::InStackQueueLocked<T>
 ```
 # Usage
 ## Example for using thread
@@ -38,12 +50,18 @@ handle.join().expect("join tread failed");
 
 println!("thread exit status: {:x}", handle.exit_status().unwrap());
 ```
-## Example for using Fast/Guarded Mutex
+## Example for using Fast/Guarded/Resource/Spin mutex locks
 ```
 use ksync::mutex::*;
 
 let mut handles: Vec<JoinHandle> = Vec::new();
 
+// For Fast Mutex:
+// let let shared_counter = FastLocked::new(0u32);
+// For Resources:
+// let shared_counter = ResourceLocked::new(0u32);
+// For Spinlocks:
+// let shared_counter = SpinLocked::new(0u32);
 let shared_counter = GuardLocked::new(0u32);
 
 for _ in 0..4 {
