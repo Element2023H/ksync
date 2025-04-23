@@ -457,6 +457,18 @@ impl<T: Display, M: QueuedMutex> Debug for StackQueueLocked<T, M> {
     }
 }
 
+impl<T, M: QueuedMutex> Drop for StackQueueLocked<T, M>  {
+    fn drop(&mut self) {
+        unsafe {
+            drop_in_place(&mut (*self.inner.as_ptr()).data);
+
+            drop_in_place(&mut (*self.inner.as_ptr()).mutex);
+
+            ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
+        }
+    }
+}
+
 #[repr(C)]
 pub struct LockedQuueHandle(KLOCK_QUEUE_HANDLE);
 
