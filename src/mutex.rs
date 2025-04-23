@@ -63,6 +63,10 @@ pub trait Mutex {
 
     fn init(this: &mut Self::Target);
 
+    fn shareable() -> bool {
+        false
+    }
+
     fn lock(&self);
 
     fn trylock(&self) -> bool {
@@ -186,6 +190,10 @@ impl Mutex for ResourceMutex {
                 _ => panic!("can not initialize ERESOURCE"),
             }
         }
+    }
+
+    fn shareable() -> bool {
+        true
     }
 
     fn lock(&self) {
@@ -324,7 +332,7 @@ impl<T, M: Mutex> Locked<T, M> {
         } else {
             unsafe { (*self.inner.as_ptr()).mutex.lock() };
 
-            Ok(MutexGuard { mutex: self })
+            Ok(MutexGuard { locker: self })
         }
     }
 
@@ -334,7 +342,7 @@ impl<T, M: Mutex> Locked<T, M> {
         } else {
             unsafe { (*self.inner.as_ptr()).mutex.lock_shared() };
 
-            Ok(MutexGuard { mutex: self })
+            Ok(MutexGuard { locker: self })
         }
     }
 }
@@ -358,26 +366,30 @@ impl<T: Display, M: Mutex> Debug for Locked<T, M> {
 }
 
 pub struct MutexGuard<'a, T, M: Mutex> {
-    mutex: &'a Locked<T, M>,
+    locker: &'a Locked<T, M>,
 }
 
 impl<'a, T, M: Mutex> Deref for MutexGuard<'a, T, M> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.mutex.inner.as_ref().data }
+        unsafe { &self.locker.inner.as_ref().data }
     }
 }
 
 impl<'a, T, M: Mutex> DerefMut for MutexGuard<'a, T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut (*self.mutex.inner.as_ptr()).data }
+        unsafe { &mut (*self.locker.inner.as_ptr()).data }
     }
 }
 
 impl<'a, T, M: Mutex> Drop for MutexGuard<'a, T, M> {
     fn drop(&mut self) {
         unsafe {
-            (*self.mutex.inner.as_ptr()).mutex.unlock();
+            if !M::shareable() {
+                (*self.locker.inner.as_ptr()).mutex.unlock();
+            } else {
+                (*self.locker.inner.as_ptr()).mutex.unlock_shared();
+            }
         }
     }
 }
@@ -447,7 +459,7 @@ impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
 
             Ok(InStackMutexGuard {
                 handle,
-                mutex: self,
+                locker: self,
             })
         }
     }
@@ -484,27 +496,27 @@ impl LockedQuueHandle {
 
 pub struct InStackMutexGuard<'a, T, M: QueuedMutex> {
     handle: &'a mut LockedQuueHandle,
-    mutex: &'a StackQueueLocked<T, M>,
+    locker: &'a StackQueueLocked<T, M>,
 }
 
 impl<'a, T, M: QueuedMutex> Deref for InStackMutexGuard<'a, T, M> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.mutex.inner.as_ref().data }
+        unsafe { &self.locker.inner.as_ref().data }
     }
 }
 
 impl<'a, T, M: QueuedMutex> DerefMut for InStackMutexGuard<'a, T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut (*self.mutex.inner.as_ptr()).data }
+        unsafe { &mut (*self.locker.inner.as_ptr()).data }
     }
 }
 
 impl<'a, T, M: QueuedMutex> Drop for InStackMutexGuard<'a, T, M> {
     fn drop(&mut self) {
         unsafe {
-            (*self.mutex.inner.as_ptr())
+            (*self.locker.inner.as_ptr())
                 .mutex
                 .unlock(&mut self.handle.0);
         }
