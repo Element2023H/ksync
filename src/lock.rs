@@ -139,7 +139,7 @@ impl<T: Uniquable> Drop for UniqueLock<'_, T> {
     }
 }
 
-/// a c++ like unique_lock wrapper for standalone usage
+/// a c++ like shared_lock wrapper for standalone usage
 /// # Example
 /// ```
 /// // define some struct
