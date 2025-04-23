@@ -4,6 +4,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 
+pub mod lock;
 pub mod mutex;
 pub mod ntstatus;
 pub mod thread;
@@ -51,6 +52,8 @@ pub mod test {
     use core::time::Duration;
 
     use wdk::println;
+
+    use crate::lock;
 
     use super::mutex::*;
     use super::thread::*;
@@ -213,15 +216,13 @@ pub mod test {
     }
 
     pub fn test_standalone_locks() {
-        let mutex = FastMutex::create();
-
         let mut counter = 0u32;
 
-        mutex.lock();
+        let lock = lock::FastLock::new().unwrap();
 
-        counter += 1;
-
-        mutex.unlock();
+        if let Ok(_) = lock::UniqueLock::new(&lock) {
+            counter += 1;
+        }
 
         println!("counter = {}", counter);
     }

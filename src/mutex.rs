@@ -54,7 +54,7 @@ mod otf {
     }
 }
 
-use otf::ex_allocate_pool_zero;
+pub use otf::ex_allocate_pool_zero;
 
 const MUTEX_TAG: ULONG = u32::from_ne_bytes(*b"xetm");
 
@@ -66,16 +66,20 @@ pub trait Mutex {
     fn lock(&self);
 
     fn trylock(&self) -> bool {
-        false
+        unimplemented!()
     }
 
-    fn lock_shared(&self) {}
+    fn lock_shared(&self) {
+        unimplemented!()
+    }
 
     fn try_lock_shared(&self) -> bool {
-        false
+        unimplemented!()
     }
 
-    fn unlock_shared(&self) {}
+    fn unlock_shared(&self) {
+        unimplemented!()
+    }
 
     fn unlock(&self);
 
@@ -284,7 +288,7 @@ struct InnerData<T, M: Mutex> {
     data: T,
 }
 
-// a strategy lock wrapper for FastMutex, GuardMutex, Spinlock, Resources
+/// a strategy lock wrapper for FastMutex, GuardMutex, Spinlock, Resources
 pub struct Locked<T, M>
 where
     M: Mutex,
@@ -457,7 +461,7 @@ impl<T: Display, M: QueuedMutex> Debug for StackQueueLocked<T, M> {
     }
 }
 
-impl<T, M: QueuedMutex> Drop for StackQueueLocked<T, M>  {
+impl<T, M: QueuedMutex> Drop for StackQueueLocked<T, M> {
     fn drop(&mut self) {
         unsafe {
             drop_in_place(&mut (*self.inner.as_ptr()).data);
@@ -504,34 +508,6 @@ impl<'a, T, M: QueuedMutex> Drop for InStackMutexGuard<'a, T, M> {
                 .mutex
                 .unlock(&mut self.handle.0);
         }
-    }
-}
-
-/// for convenient usage in where we needs to use the lock standalone
-///
-/// ***For example:***</br>
-/// here is some struct
-/// ```
-/// struct Test {
-///     a: u8,
-///     b: u16,
-///     c: u32,
-///     // mutex is only used to protect access of member `b` and `c`
-///     mutex: Box<FastMutex>
-/// }
-///
-/// let test = Box::new(Test{ a: 0, b: 0, c: 0, FastMutex::create() });
-/// // ... then use test across multi threads
-/// ```
-pub trait MutexNew<T: Mutex> {
-    fn create() -> Box<T>;
-}
-
-impl<T: Mutex<Target = T>> MutexNew<T> for T {
-    fn create() -> Box<T> {
-        let mut this = Box::new(unsafe { MaybeUninit::<Self>::zeroed().assume_init() });
-        T::init(this.as_mut());
-        this
     }
 }
 
