@@ -11,8 +11,8 @@ use wdk_sys::{
     _EVENT_TYPE::SynchronizationEvent,
     _POOL_TYPE::NonPagedPoolNx,
     APC_LEVEL, DISPATCH_LEVEL, ERESOURCE, FALSE, FAST_MUTEX, FM_LOCK_BIT, KGUARDED_MUTEX, KIRQL,
-    KLOCK_QUEUE_HANDLE, KSPIN_LOCK, PKLOCK_QUEUE_HANDLE, POOL_TYPE, PVOID, SIZE_T, STATUS_SUCCESS,
-    STATUS_UNSUCCESSFUL, TRUE, ULONG,
+    KLOCK_QUEUE_HANDLE, KSPIN_LOCK, PKLOCK_QUEUE_HANDLE, POOL_TYPE, PVOID, SIZE_T,
+    STATUS_INSUFFICIENT_RESOURCES, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, TRUE, ULONG,
     ntddk::{
         ExAcquireFastMutex, ExAcquireResourceExclusiveLite, ExAcquireResourceSharedLite,
         ExDeleteResourceLite, ExFreePoolWithTag, ExInitializeResourceLite, ExReleaseFastMutex,
@@ -293,21 +293,25 @@ where
 }
 
 impl<T, M: Mutex> Locked<T, M> {
-    pub fn new(data: T) -> Self {
+    pub fn new(data: T) -> Result<Self, NtError> {
         let buf = ex_allocate_pool_zero(
             NonPagedPoolNx,
             mem::size_of::<InnerData<T, M>>() as _,
             MUTEX_TAG,
         ) as *mut InnerData<T, M>;
 
+        if buf.is_null() {
+            return Err(STATUS_INSUFFICIENT_RESOURCES.into());
+        }
+
         unsafe {
             (*buf).data = data;
             M::init(&mut (*buf).mutex);
         }
 
-        Self {
+        Ok(Self {
             inner: NonNull::new(buf).unwrap(),
-        }
+        })
     }
 
     pub fn lock(&self) -> Result<MutexGuard<'_, T, M>, NtError> {
@@ -407,21 +411,25 @@ pub struct StackQueueLocked<T, M: QueuedMutex> {
 }
 
 impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
-    pub fn new(data: T) -> Self {
+    pub fn new(data: T) -> Result<Self, NtError> {
         let buf = ex_allocate_pool_zero(
             NonPagedPoolNx,
             mem::size_of::<QueuedInnerData<T, M>>() as _,
             MUTEX_TAG,
         ) as *mut QueuedInnerData<T, M>;
 
+        if buf.is_null() {
+            return Err(STATUS_INSUFFICIENT_RESOURCES.into());
+        }
+
         unsafe {
             (*buf).data = data;
             M::init(&mut (*buf).mutex);
         };
 
-        Self {
+        Ok(Self {
             inner: NonNull::new(buf).unwrap(),
-        }
+        })
     }
 
     pub fn lock<'a>(
@@ -488,18 +496,19 @@ impl<'a, T, M: QueuedMutex> Drop for InStackMutexGuard<'a, T, M> {
 }
 
 /// for convenient usage in where we needs to use the lock standalone
-/// 
+///
 /// ***For example:***</br>
 /// here is some struct
 /// ```
 /// struct Test {
-///     a: u32,
-///     b: u64
-///     // mutex is only used to protect access of member `b`
+///     a: u8,
+///     b: u16,
+///     c: u32,
+///     // mutex is only used to protect access of member `b` and `c`
 ///     mutex: Box<FastMutex>
 /// }
-/// 
-/// let test = Box::new(Test{ a: 0, b: 0, FastMutex::create() });
+///
+/// let test = Box::new(Test{ a: 0, b: 0, c: 0, FastMutex::create() });
 /// // ... then use test across multi threads
 /// ```
 pub trait MutexNew<T: Mutex> {

@@ -10,7 +10,7 @@ pub mod thread;
 
 mod constants;
 pub(crate) use constants::*;
- 
+
 extern crate alloc;
 
 #[macro_export]
@@ -77,7 +77,7 @@ pub mod test {
     pub fn test_guard_mutex() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = GuardLocked::new(0u32);
+        let shared_counter = GuardLocked::new(0u32).unwrap();
 
         for _ in 0..4 {
             handles.push(
@@ -105,7 +105,7 @@ pub mod test {
     pub fn test_fast_mutex() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = FastLocked::new(0u32);
+        let shared_counter = FastLocked::new(0u32).unwrap();
 
         for _ in 0..4 {
             handles.push(
@@ -132,7 +132,7 @@ pub mod test {
     pub fn test_spinlock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = SpinLocked::new(0u32);
+        let shared_counter = SpinLocked::new(0u32).unwrap();
 
         for _ in 0..4 {
             handles.push(
@@ -159,7 +159,7 @@ pub mod test {
     pub fn test_resouce_lock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = ResouceLocked::new(0u32);
+        let shared_counter = ResouceLocked::new(0u32).unwrap();
 
         for _ in 0..4 {
             handles.push(
@@ -186,7 +186,7 @@ pub mod test {
     pub fn test_queued_spin_lock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = InStackQueueLocked::new(0u32);
+        let shared_counter = InStackQueueLocked::new(0u32).unwrap();
 
         for _ in 0..4 {
             handles.push(
