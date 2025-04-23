@@ -15,7 +15,7 @@ thread::this_thread::id()
 // yielding
 thread::this_thread::pause()
 ```
-## Mutexs
+## Locked Objects
 ```
 // a wrapper for Guarded Mutex
 mutex::GuardLocked<T>
@@ -31,6 +31,27 @@ mutex::SpinLocked<T>
 
 // a wrapper for Queued Stack Spinlocks
 mutex::InStackQueueLocked<T>
+```
+## Standalone Locks
+```
+// a standalone wrapper for Fast Mutex
+lock::FastLock
+
+// a standalone wrapper for Spin Lock
+lock::SpinLock
+
+// a standalone wrapper for Guarded Mutex
+lock::GuardedLock
+
+// a standalone wrapper for ERESOURCE
+// note: a ResourceLock is reentrant which means lock_shared & unlock_share is available
+lock::ResourceLock
+
+// a c++ STL like wrapper for std::unqiue_lock
+lock::UniqueLock
+
+// a c++ STL like wrapper for std::shared_lock
+lock::SharedLock
 ```
 # Usage
 ## Example for using thread
@@ -57,12 +78,12 @@ use ksync::mutex::*;
 let mut handles: Vec<JoinHandle> = Vec::new();
 
 // For Fast Mutex:
-// let let shared_counter = FastLocked::new(0u32);
+// let let shared_counter = FastLocked::new(0u32).unwrap();
 // For Resources:
-// let shared_counter = ResourceLocked::new(0u32);
+// let shared_counter = ResourceLocked::new(0u32).unwrap();
 // For Spinlocks:
-// let shared_counter = SpinLocked::new(0u32);
-let shared_counter = GuardLocked::new(0u32);
+// let shared_counter = SpinLocked::new(0u32).unwrap();
+let shared_counter = GuardLocked::new(0u32).unwrap();
 
 for _ in 0..4 {
     handles.push(
@@ -92,7 +113,7 @@ use ksync::mutex::*;
 
 let mut handles: Vec<JoinHandle> = Vec::new();
 
-let shared_counter = InStackQueueLocked::new(0u32);
+let shared_counter = InStackQueueLocked::new(0u32).unwrap();
 
 for _ in 0..4 {
     handles.push(
@@ -116,3 +137,36 @@ for mut h in handles {
 
 // check the shared counter
 println!("the final value of shared counter is: {:?}", shared_counter);
+
+```
+## Example for Standalone Locks
+```
+{
+    let mut counter = 0u32;
+
+    // the lock maybe allocated somewhere else
+    let lock = lock::FastLock::new().unwrap();
+
+    // create a unique scoped lock
+    // we can also use lock.lock() & lock.unlock() inside a code scope
+    if let Ok(_) = lock::UniqueLock::new(&lock) {
+        counter += 1;
+    }
+
+    println!("counter = {}", counter);
+}
+
+{
+    let mut counter = 0u32;
+
+    // the lock maybe allocated somewhere else
+    let lock = lock::ResourceLock::new().unwrap();
+
+    // create a shared scoped lock
+    // we can also use lock.lock_shared() & lock.unlock_shared() inside a code scope
+    // a resource lock can be both unique and shared
+    if let Ok(_) = lock::SharedLock::new(&lock) {
+        println!("counter = {}", counter);
+    }
+}
+```
