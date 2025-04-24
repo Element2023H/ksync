@@ -1,10 +1,10 @@
 #![no_std]
-#![allow(dead_code)]
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 
 pub mod lock;
+pub mod utils;
 pub mod mutex;
 pub mod ntstatus;
 pub mod thread;
@@ -14,40 +14,7 @@ pub(crate) use constants::*;
 
 extern crate alloc;
 
-#[macro_export]
-macro_rules! handle_to_ulong {
-    ($a:expr) => {
-        $a as u32
-    };
-}
-
-#[macro_export]
-macro_rules! ulong_to_handle {
-    ($a:expr) => {
-        $a as *mut core::ffi::c_void
-    };
-}
-
-#[macro_export]
-macro_rules! initialize_object_attributes {
-    () => {
-        wdk_sys::OBJECT_ATTRIBUTES {
-            Length: core::mem::size_of::<wdk_sys::OBJECT_ATTRIBUTES>() as _,
-            ..unsafe { mem::zeroed }
-        }
-    };
-    ($n:expr, $a:expr, $r:expr, $s:expr) => {
-        wdk_sys::OBJECT_ATTRIBUTES {
-            Length: core::mem::size_of::<wdk_sys::OBJECT_ATTRIBUTES>() as _,
-            RootDirectory: $r,
-            Attributes: $a,
-            ObjectName: $n,
-            SecurityDescriptor: $s,
-            SecurityQualityOfService: ptr::null_mut(),
-        }
-    };
-}
-
+// call it in another driver to do the testing
 pub mod test {
     use core::time::Duration;
 
