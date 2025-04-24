@@ -1,6 +1,7 @@
 use wdk_sys::{NTSTATUS, STATUS_SUCCESS};
 
-#[derive(Clone, Copy)]
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct NtError(NTSTATUS);
 
 impl NtError {
