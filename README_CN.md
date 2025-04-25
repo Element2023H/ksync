@@ -1,8 +1,8 @@
 # ksync
-EN | [中文](./README_CN.md)
+中文 | [EN](./README.md)
 
-rust wrappers for kernel mode thread, FastMutex, GuardMutex, Resources and Queued Spin Locks
-# Features
+使用Rust包装Windows内核态的 thread, FastMutex, GuardMutex, Resources and Queued Spin Locks
+# 特色
 ## Threads
 ```
 // create a joinable system thread
@@ -55,8 +55,8 @@ lock::UniqueLock
 // a c++ STL like wrapper for std::shared_lock
 lock::SharedLock
 ```
-# Usage
-## Example for using thread
+# 使用方法
+## thread 示例
 ```
 use ksync::thread::{self, this_thread};
 
@@ -73,7 +73,7 @@ handle.join().expect("join tread failed");
 
 println!("thread exit status: {:x}", handle.exit_status().unwrap());
 ```
-## Example for using Fast/Guarded/Resource/Spin mutex locks
+## Fast/Guarded/Resource/Spin mutex locks 示例
 ```
 use ksync::mutex::*;
 
@@ -109,7 +109,7 @@ for mut h in handles {
 println!("the final value of shared counter is: {:?}", shared_counter);
 ```
 
-## Example for using Queued Stack Spinlocks
+## Queued Stack Spinlocks 示例
 ```
 use ksync::mutex::*;
 
@@ -141,7 +141,7 @@ for mut h in handles {
 println!("the final value of shared counter is: {:?}", shared_counter);
 
 ```
-## Example for Standalone Locks
+## Standalone Locks 示例
 ```
 {
     let mut counter = 0u32;
