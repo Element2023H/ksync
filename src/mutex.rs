@@ -69,20 +69,20 @@ pub trait Mutex {
 
     fn lock(&self);
 
-    fn trylock(&self) -> bool {
-        unimplemented!()
+    fn try_lock(&self) -> bool {
+        unimplemented!("trylock")
     }
 
     fn lock_shared(&self) {
-        unimplemented!()
+        unimplemented!("lock_shared")
     }
 
     fn try_lock_shared(&self) -> bool {
-        unimplemented!()
+        unimplemented!("try_lock_shared")
     }
 
     fn unlock_shared(&self) {
-        unimplemented!()
+        unimplemented!("unlock_shared")
     }
 
     fn unlock(&self);
@@ -159,7 +159,7 @@ impl Mutex for FastMutex {
         }
     }
 
-    fn trylock(&self) -> bool {
+    fn try_lock(&self) -> bool {
         unsafe { ExTryToAcquireFastMutex(self.inner.as_ptr()) != 0 }
     }
 
@@ -201,7 +201,7 @@ impl Mutex for GuardedMutex {
         }
     }
 
-    fn trylock(&self) -> bool {
+    fn try_lock(&self) -> bool {
         unsafe { KeTryToAcquireGuardedMutex(self.inner.as_ptr()) != 0 }
     }
 
@@ -248,7 +248,7 @@ impl Mutex for ResourceMutex {
         true
     }
 
-    fn trylock(&self) -> bool {
+    fn try_lock(&self) -> bool {
         unsafe { ExAcquireResourceExclusiveLite(self.inner.as_ptr(), FALSE as _) != 0 }
     }
 
@@ -315,7 +315,7 @@ impl Mutex for SpinMutex {
         }
     }
 
-    fn trylock(&self) -> bool {
+    fn try_lock(&self) -> bool {
         unsafe { KeTryToAcquireSpinLockAtDpcLevel(&mut (*self.inner.as_ptr()).lock) != 0 }
     }
 
@@ -436,7 +436,7 @@ impl<T, M: Mutex> Locked<T, M> {
         unsafe {
             // rust does not actually "move" the `InnerData` into the memory location where the raw pointer `layout` points to
             // yes this is a trap here(in fact, it just memcpy it rather than move), that's why we use a `ManuallyDrop` to ensure the heap allocated `InnerData` will
-            // not be dropped upon goes out of scope, since we will drop it manually in `Locked::drop()`
+            // not be dropped upon it goes out of scope, since we will drop it manually in `Locked::drop()`
             *layout = InnerData {
                 mutex: ManuallyDrop::new(M::new()),
                 data,
@@ -462,15 +462,26 @@ impl<T, M: Mutex> Locked<T, M> {
 
     /// returns a `MutexGuard` for shared access
     ///
-    /// the caller can only gain a immutable ref of `T` through `MutexGuard`</br>
-    /// perhaps we need a some type like `SharedMutexGuard` that only implements `Deref`
+    /// the caller can only gain a immutable ref of `T` through `MutexGuard`
+    ///
+    /// ***NOTE***:
+    /// 
+    /// maybe we need a some type like `SharedMutexGuard` that only implements `Deref`?
+    /// but i think using compile-time constant here is a good choice
     pub fn lock_shared(&self) -> Result<MutexGuard<'_, T, M>, NtError> {
         if !M::irql_ok() {
             Err(NtError::from(STATUS_UNSUCCESSFUL))
         } else {
-            unsafe { (*self.inner.as_ptr()).mutex.lock_shared() };
+            // this is a wrong usage of a unshareable Mutex
+            // the result of M::shareable() will be optmized as compile-time constant, so it is zero-cost
+            if !M::shareable() {
+                #[cfg(debug_assertions)]
+                panic!("Can not call lock_shared on a unshareable Mutex");
 
-            Ok(MutexGuard { locker: self })
+                Err(NtError::from(STATUS_UNSUCCESSFUL))
+            } else {
+                Ok(MutexGuard { locker: self })
+            }
         }
     }
 }
@@ -493,13 +504,19 @@ impl<T: Display, M: Mutex> Debug for Locked<T, M> {
     }
 }
 
+/// An RAII implementation of a "scoped lock" of a mutex. When this structure is
+/// dropped (falls out of scope), the lock will be unlocked.
 pub struct MutexGuard<'a, T, M: Mutex> {
     locker: &'a Locked<T, M>,
 }
 
 impl<'a, T, M: Mutex> MutexGuard<'a, T, M> {
     fn new(locker: &'a Locked<T, M>) -> Self {
-        unsafe { (*locker.inner.as_ptr()).mutex.lock() };
+        if !M::shareable() {
+            unsafe { (*locker.inner.as_ptr()).mutex.lock() };
+        } else {
+            unsafe { (*locker.inner.as_ptr()).mutex.lock_shared() }
+        }
 
         Self { locker }
     }
@@ -512,7 +529,6 @@ impl<'a, T, M: Mutex> Deref for MutexGuard<'a, T, M> {
     }
 }
 
-// TODO: `DerefMut` will be implemented only if `M` is shareable, but how to do this ?
 impl<'a, T, M: Mutex> DerefMut for MutexGuard<'a, T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.locker.inner.as_ptr()).data }
