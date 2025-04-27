@@ -1,5 +1,8 @@
 //! this mod provide wrappers for c++ like std::unique_lock and std::shared_lock
 //! the Mutex is atomically unlocked with RAII
+//! NOTE:
+//! this mod only implements the `unique lock` and `shared lock` primitives
+//! modern rust users should use `Mutex` instead
 use crate::mutex::Mutex;
 
 /// a c++ like unique_lock wrapper for standalone usage
