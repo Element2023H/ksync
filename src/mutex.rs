@@ -452,7 +452,7 @@ impl<T, M: Mutex> Locked<T, M> {
     ///
     /// the caller can gain a mutable or immutable ref to `T` through `MutexGuard`</br>
     /// the `MutexGuard` implement both `Deref` and `DerefMut` to ensure this
-    pub fn lock(&self) -> Result<MutexGuard<'_, T, M>, NtError> {
+    pub fn lock(&self) -> Result<MutexGuard<'_, true, T, M>, NtError> {
         if !M::irql_ok() {
             Err(NtError::from(STATUS_UNSUCCESSFUL))
         } else {
@@ -468,14 +468,17 @@ impl<T, M: Mutex> Locked<T, M> {
     /// 
     /// maybe we need a some type like `SharedMutexGuard` that only implements `Deref`?
     /// but i think using compile-time constant here is a good choice
-    pub fn lock_shared(&self) -> Result<MutexGuard<'_, T, M>, NtError> {
+    pub fn lock_shared(&self) -> Result<MutexGuard<'_, false, T, M>, NtError> {
         if !M::irql_ok() {
             Err(NtError::from(STATUS_UNSUCCESSFUL))
         } else {
             // this is a wrong usage of a unshareable Mutex, we can not get a `shareable` MutexGuard from a `unshareable` Mutex
             // the result of M::shareable() will be optmized as compile-time constant, so it is zero-cost
             if !M::shareable() {
+                #[cfg(debug_assertions)]
                 panic!("Can not call lock_shared on a unshareable Mutex");
+
+                Err(NtError::from(STATUS_UNSUCCESSFUL))
             } else {
                 Ok(MutexGuard { locker: self })
             }
@@ -503,13 +506,22 @@ impl<T: Display, M: Mutex> Debug for Locked<T, M> {
 
 /// An RAII implementation of a "scoped lock" of a mutex. When this structure is
 /// dropped (falls out of scope), the lock will be unlocked.
-pub struct MutexGuard<'a, T, M: Mutex> {
+/// 
+/// # Parameters
+/// - EXCLUSIVE: indicates if the lock should be held exclusive
+/// - T: the procted data type
+/// - M: the underlying mutex
+/// 
+/// # SAFETY
+/// the protected `T` can be borrowed as mutable only if the lock can be held exclusively</br>
+/// otherwise it is an error and the `DerefMut()` will panic
+pub struct MutexGuard<'a, const EXCLUSIVE: bool, T, M: Mutex> {
     locker: &'a Locked<T, M>,
 }
 
-impl<'a, T, M: Mutex> MutexGuard<'a, T, M> {
+impl<'a, const EXCLUSIVE: bool, T, M: Mutex> MutexGuard<'a, EXCLUSIVE, T, M> {
     fn new(locker: &'a Locked<T, M>) -> Self {
-        if !M::shareable() {
+        if EXCLUSIVE {
             unsafe { (*locker.inner.as_ptr()).mutex.lock() };
         } else {
             unsafe { (*locker.inner.as_ptr()).mutex.lock_shared() }
@@ -519,29 +531,29 @@ impl<'a, T, M: Mutex> MutexGuard<'a, T, M> {
     }
 }
 
-impl<'a, T, M: Mutex> Deref for MutexGuard<'a, T, M> {
+impl<'a, const EXCLUSIVE: bool, T, M: Mutex> Deref for MutexGuard<'a, EXCLUSIVE, T, M> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe { &self.locker.inner.as_ref().data }
     }
 }
 
-impl<'a, T, M: Mutex> DerefMut for MutexGuard<'a, T, M> {
+impl<'a, const EXCLUSIVE: bool, T, M: Mutex> DerefMut for MutexGuard<'a, EXCLUSIVE, T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        // this is a wrong usage of a shareable Mutex
-        // we got a shareable Mutex, but wants to deref its protected data as mutable
-        if M::shareable() {
-            panic!("can not deref a mutable MutexGuard while the Mutex is shareable");
-        } else {
+        // SAFETY: we can get a mut ref of `T` only when MutexGuard is `locked` exclusively
+        // otherwise fail the operation
+        if EXCLUSIVE {
             unsafe { &mut (*self.locker.inner.as_ptr()).data }
+        } else {
+            panic!("can not get a mutable ref of `T` when the lock is not held exclusively");
         }
     }
 }
 
-impl<'a, T, M: Mutex> Drop for MutexGuard<'a, T, M> {
+impl<'a, const EXCLUSIVE: bool, T, M: Mutex> Drop for MutexGuard<'a, EXCLUSIVE, T, M> {
     fn drop(&mut self) {
         unsafe {
-            if !M::shareable() {
+            if EXCLUSIVE {
                 (*self.locker.inner.as_ptr()).mutex.unlock();
             } else {
                 (*self.locker.inner.as_ptr()).mutex.unlock_shared();
