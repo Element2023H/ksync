@@ -70,7 +70,7 @@ pub trait Mutex {
     fn lock(&self);
 
     fn try_lock(&self) -> bool {
-        unimplemented!("trylock")
+        unimplemented!("try_lock")
     }
 
     fn lock_shared(&self) {
