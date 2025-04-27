@@ -472,13 +472,10 @@ impl<T, M: Mutex> Locked<T, M> {
         if !M::irql_ok() {
             Err(NtError::from(STATUS_UNSUCCESSFUL))
         } else {
-            // this is a wrong usage of a unshareable Mutex
+            // this is a wrong usage of a unshareable Mutex, we can not get a `shareable` MutexGuard from a `unshareable` Mutex
             // the result of M::shareable() will be optmized as compile-time constant, so it is zero-cost
             if !M::shareable() {
-                #[cfg(debug_assertions)]
                 panic!("Can not call lock_shared on a unshareable Mutex");
-
-                Err(NtError::from(STATUS_UNSUCCESSFUL))
             } else {
                 Ok(MutexGuard { locker: self })
             }
@@ -531,7 +528,13 @@ impl<'a, T, M: Mutex> Deref for MutexGuard<'a, T, M> {
 
 impl<'a, T, M: Mutex> DerefMut for MutexGuard<'a, T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut (*self.locker.inner.as_ptr()).data }
+        // this is a wrong usage of a shareable Mutex
+        // we got a shareable Mutex, but wants to deref its protected data as mutable
+        if M::shareable() {
+            panic!("can not deref a mutable MutexGuard while the Mutex is shareable");
+        } else {
+            unsafe { &mut (*self.locker.inner.as_ptr()).data }
+        }
     }
 }
 
