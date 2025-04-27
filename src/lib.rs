@@ -185,7 +185,7 @@ pub mod test {
     pub fn test_standalone_locks() {
         let mut counter = 0u32;
 
-        let lock = lock::FastLock::new().unwrap();
+        let lock = FastMutex::new();
 
         if let Ok(_) = lock::UniqueLock::new(&lock) {
             counter += 1;

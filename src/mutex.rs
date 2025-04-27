@@ -1,9 +1,7 @@
 use crate::ntstatus::NtError;
-use alloc::boxed::Box;
 use core::{
-    cell::UnsafeCell,
     fmt::{Debug, Display},
-    mem::{self, MaybeUninit},
+    mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr::{NonNull, drop_in_place},
 };
@@ -11,7 +9,7 @@ use wdk_sys::{
     _EVENT_TYPE::SynchronizationEvent,
     _POOL_TYPE::NonPagedPoolNx,
     APC_LEVEL, DISPATCH_LEVEL, ERESOURCE, FALSE, FAST_MUTEX, FM_LOCK_BIT, KGUARDED_MUTEX, KIRQL,
-    KLOCK_QUEUE_HANDLE, KSPIN_LOCK, PKLOCK_QUEUE_HANDLE, POOL_TYPE, PVOID, SIZE_T,
+    KLOCK_QUEUE_HANDLE, KSPIN_LOCK, PKLOCK_QUEUE_HANDLE, PVOID, SIZE_T,
     STATUS_INSUFFICIENT_RESOURCES, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, TRUE, ULONG,
     ntddk::{
         ExAcquireFastMutex, ExAcquireResourceExclusiveLite, ExAcquireResourceSharedLite,
@@ -37,6 +35,8 @@ fn ExInitializeFastMutex(fast_mutex: *mut FAST_MUTEX) {
 // out of fashion api collections
 // TODO: move it out of this module
 mod otf {
+    use wdk_sys::POOL_TYPE;
+
     use super::*;
 
     unsafe extern "C" {
@@ -61,7 +61,7 @@ const MUTEX_TAG: ULONG = u32::from_ne_bytes(*b"xetm");
 pub trait Mutex {
     type Target: Mutex;
 
-    fn init(this: &mut Self::Target);
+    fn new() -> Self::Target;
 
     fn shareable() -> bool {
         false
@@ -95,7 +95,7 @@ pub trait Mutex {
 pub trait QueuedMutex {
     type Target: QueuedMutex;
 
-    fn init(this: &mut Self::Target);
+    fn new() -> Self::Target;
 
     fn lock(&self, handle: PKLOCK_QUEUE_HANDLE);
 
@@ -109,26 +109,32 @@ pub trait QueuedMutex {
 pub struct EmptyMutex;
 
 pub struct FastMutex {
-    inner: UnsafeCell<FAST_MUTEX>,
+    inner: NonNull<FAST_MUTEX>,
 }
 
 pub struct GuardedMutex {
-    inner: UnsafeCell<KGUARDED_MUTEX>,
+    inner: NonNull<KGUARDED_MUTEX>,
 }
 
 pub struct ResourceMutex {
-    inner: UnsafeCell<ERESOURCE>,
+    inner: NonNull<ERESOURCE>,
 }
 
 pub struct SpinMutex {
-    inner: UnsafeCell<SpinLockInner>,
+    inner: NonNull<SpinLockInner>,
 }
+
+unsafe impl Send for EmptyMutex {}
+unsafe impl Send for FastMutex {}
+unsafe impl Send for GuardedMutex {}
+unsafe impl Send for ResourceMutex {}
+unsafe impl Send for SpinMutex {}
 
 impl Mutex for EmptyMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        let _ = this;
+    fn new() -> Self::Target {
+        Self
     }
 
     fn lock(&self) {}
@@ -139,56 +145,102 @@ impl Mutex for EmptyMutex {
 impl Mutex for FastMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        ExInitializeFastMutex(this.inner.get());
-    }
+    fn new() -> Self::Target {
+        let mutex =
+            ex_allocate_pool_zero(NonPagedPoolNx, mem::size_of::<FAST_MUTEX>() as _, MUTEX_TAG)
+                as *mut FAST_MUTEX;
 
-    fn lock(&self) {
-        unsafe {
-            ExAcquireFastMutex(self.inner.get());
+        if !mutex.is_null() {
+            ExInitializeFastMutex(mutex);
+        }
+
+        Self {
+            inner: NonNull::new(mutex).expect("can not allocate memory for FastMutex"),
         }
     }
 
     fn trylock(&self) -> bool {
-        return unsafe { ExTryToAcquireFastMutex(self.inner.get()) != 0 };
+        unsafe { ExTryToAcquireFastMutex(self.inner.as_ptr()) != 0 }
+    }
+
+    fn lock(&self) {
+        unsafe {
+            ExAcquireFastMutex(self.inner.as_ptr());
+        }
     }
 
     fn unlock(&self) {
-        unsafe { ExReleaseFastMutex(self.inner.get()) };
+        unsafe { ExReleaseFastMutex(self.inner.as_ptr()) };
+    }
+}
+
+impl Drop for FastMutex {
+    fn drop(&mut self) {
+        unsafe {
+            ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
+        }
     }
 }
 
 impl Mutex for GuardedMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        unsafe { KeInitializeGuardedMutex(this.inner.get()) };
-    }
+    fn new() -> Self::Target {
+        let mutex = ex_allocate_pool_zero(
+            NonPagedPoolNx,
+            mem::size_of::<KGUARDED_MUTEX>() as _,
+            MUTEX_TAG,
+        ) as *mut KGUARDED_MUTEX;
 
-    fn lock(&self) {
-        unsafe {
-            KeAcquireGuardedMutex(self.inner.get());
+        if !mutex.is_null() {
+            unsafe { KeInitializeGuardedMutex(mutex) };
+        }
+
+        Self {
+            inner: NonNull::new(mutex).expect("can not allocate memory for Guarded Mutex"),
         }
     }
 
     fn trylock(&self) -> bool {
-        return unsafe { KeTryToAcquireGuardedMutex(self.inner.get()) != 0 };
+        unsafe { KeTryToAcquireGuardedMutex(self.inner.as_ptr()) != 0 }
+    }
+
+    fn lock(&self) {
+        unsafe {
+            KeAcquireGuardedMutex(self.inner.as_ptr());
+        }
     }
 
     fn unlock(&self) {
-        unsafe { KeReleaseGuardedMutex(self.inner.get()) };
+        unsafe { KeReleaseGuardedMutex(self.inner.as_ptr()) };
+    }
+}
+
+impl Drop for GuardedMutex {
+    fn drop(&mut self) {
+        unsafe {
+            ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
+        }
     }
 }
 
 impl Mutex for ResourceMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        unsafe {
-            match ExInitializeResourceLite(this.inner.get()) {
+    fn new() -> Self::Target {
+        let mutex =
+            ex_allocate_pool_zero(NonPagedPoolNx, mem::size_of::<ERESOURCE>() as _, MUTEX_TAG)
+                as *mut ERESOURCE;
+
+        if !mutex.is_null() {
+            match unsafe { ExInitializeResourceLite(mutex) } {
                 STATUS_SUCCESS => (),
                 _ => panic!("can not initialize ERESOURCE"),
             }
+        }
+
+        Self {
+            inner: NonNull::new(mutex).expect("can not allocate memory for ERESOURCE"),
         }
     }
 
@@ -196,41 +248,42 @@ impl Mutex for ResourceMutex {
         true
     }
 
+    fn trylock(&self) -> bool {
+        unsafe { ExAcquireResourceExclusiveLite(self.inner.as_ptr(), FALSE as _) != 0 }
+    }
+
     fn lock(&self) {
         unsafe {
-            ExAcquireResourceExclusiveLite(self.inner.get(), TRUE as _);
+            ExAcquireResourceExclusiveLite(self.inner.as_ptr(), TRUE as _);
         }
     }
 
-    fn trylock(&self) -> bool {
-        return unsafe { ExAcquireResourceExclusiveLite(self.inner.get(), FALSE as _) != 0 };
+    fn unlock(&self) {
+        unsafe { ExReleaseResourceLite(self.inner.as_ptr()) };
+    }
+
+    fn try_lock_shared(&self) -> bool {
+        unsafe { ExAcquireResourceSharedLite(self.inner.as_ptr(), FALSE as _) != 0 }
     }
 
     fn lock_shared(&self) {
         unsafe {
-            ExAcquireResourceSharedLite(self.inner.get(), TRUE as _);
+            ExAcquireResourceSharedLite(self.inner.as_ptr(), TRUE as _);
         }
     }
 
     fn unlock_shared(&self) {
         unsafe {
-            ExReleaseResourceLite(self.inner.get());
+            ExReleaseResourceLite(self.inner.as_ptr());
         }
-    }
-
-    fn try_lock_shared(&self) -> bool {
-        unsafe { ExAcquireResourceSharedLite(self.inner.get(), FALSE as _) != 0 }
-    }
-
-    fn unlock(&self) {
-        unsafe { ExReleaseResourceLite(self.inner.get()) };
     }
 }
 
 impl Drop for ResourceMutex {
     fn drop(&mut self) {
         unsafe {
-            let _ = ExDeleteResourceLite(self.inner.get());
+            let _ = ExDeleteResourceLite(self.inner.as_ptr());
+            ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
         }
     }
 }
@@ -243,25 +296,43 @@ struct SpinLockInner {
 impl Mutex for SpinMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        unsafe { KeInitializeSpinLock(&mut (*this.inner.get()).lock) };
+    fn new() -> Self::Target {
+        let mutex = ex_allocate_pool_zero(
+            NonPagedPoolNx,
+            mem::size_of::<SpinLockInner>() as _,
+            MUTEX_TAG,
+        ) as *mut SpinLockInner;
+
+        if !mutex.is_null() {
+            unsafe {
+                (*mutex).irql = 0;
+                KeInitializeSpinLock(&mut (*mutex).lock);
+            }
+        }
+
+        Self {
+            inner: NonNull::new(mutex).expect("can not allocated memory for KSPIN_LOCK"),
+        }
+    }
+
+    fn trylock(&self) -> bool {
+        unsafe { KeTryToAcquireSpinLockAtDpcLevel(&mut (*self.inner.as_ptr()).lock) != 0 }
     }
 
     fn lock(&self) {
         unsafe {
-            let inner = &mut (*self.inner.get());
+            let inner = &mut (*self.inner.as_ptr());
 
             inner.irql = KeAcquireSpinLockRaiseToDpc(&mut inner.lock);
         }
     }
 
-    fn trylock(&self) -> bool {
-        unsafe { KeTryToAcquireSpinLockAtDpcLevel(&mut (*self.inner.get()).lock) != 0 }
-    }
-
     fn unlock(&self) {
         unsafe {
-            KeReleaseSpinLock(&mut (*self.inner.get()).lock, (*self.inner.get()).irql);
+            KeReleaseSpinLock(
+                &mut (*self.inner.as_ptr()).lock,
+                (*self.inner.as_ptr()).irql,
+            );
         }
     }
 
@@ -271,17 +342,33 @@ impl Mutex for SpinMutex {
     }
 }
 
+impl Drop for SpinMutex {
+    fn drop(&mut self) {
+        unsafe { ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG) };
+    }
+}
+
 impl QueuedMutex for QueuedSpinMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        unsafe {
-            KeInitializeSpinLock(this.inner.get());
+    fn new() -> Self::Target {
+        let mutex =
+            ex_allocate_pool_zero(NonPagedPoolNx, mem::size_of::<KSPIN_LOCK>() as _, MUTEX_TAG)
+                as *mut KSPIN_LOCK;
+
+        if !mutex.is_null() {
+            unsafe {
+                KeInitializeSpinLock(mutex);
+            }
+        }
+
+        Self {
+            inner: NonNull::new(mutex).expect("can not allocated memory for QueuedSpinMutex"),
         }
     }
 
     fn lock(&self, handle: PKLOCK_QUEUE_HANDLE) {
-        unsafe { KeAcquireInStackQueuedSpinLock(self.inner.get(), handle) }
+        unsafe { KeAcquireInStackQueuedSpinLock(self.inner.as_ptr(), handle) }
     }
 
     fn unlock(&self, handle: PKLOCK_QUEUE_HANDLE) {
@@ -291,12 +378,42 @@ impl QueuedMutex for QueuedSpinMutex {
     }
 }
 
+impl Drop for QueuedSpinMutex {
+    fn drop(&mut self) {
+        unsafe { ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG) };
+    }
+}
+
+/// the internal layout for `Locked<T,M>`
+///
+/// this has the same layout as `QueuedInnerData`
 struct InnerData<T, M: Mutex> {
-    mutex: M::Target,
+    /// using `ManuallyDrop` here to ensure safety</br>
+    /// we must ensure memory consistency in `Mutex` which lives as long as Locked<T, M></br>
+    /// it should not be dropped upon it goes out of scope of `Locked::new()`
+    mutex: ManuallyDrop<M::Target>,
     data: T,
 }
 
 /// a strategy lock wrapper for FastMutex, GuardMutex, Spinlock, Resources
+///
+/// it is used combined with FastMutex, GuardedMutex, SpinMutex, and ResourceMutex types
+///
+/// # Example
+/// - unique access
+/// ```
+/// let shared_counter = FastLocked::new(0u32).unwrap();
+/// if let Ok(mut counter) = shared_counter.lock {
+///     *counter += 1;
+/// }
+/// ```
+/// - shared access
+/// ```
+/// let shared_counter = FastLocked::new(0u32).unwrap();
+/// if let Ok(counter) = shared_counter.lock_shared() {
+///     println!("counter = {}", counter);
+/// }
+/// ```
 pub struct Locked<T, M>
 where
     M: Mutex,
@@ -306,36 +423,47 @@ where
 
 impl<T, M: Mutex> Locked<T, M> {
     pub fn new(data: T) -> Result<Self, NtError> {
-        let buf = ex_allocate_pool_zero(
+        let layout = ex_allocate_pool_zero(
             NonPagedPoolNx,
             mem::size_of::<InnerData<T, M>>() as _,
             MUTEX_TAG,
         ) as *mut InnerData<T, M>;
 
-        if buf.is_null() {
+        if layout.is_null() {
             return Err(STATUS_INSUFFICIENT_RESOURCES.into());
         }
 
         unsafe {
-            (*buf).data = data;
-            M::init(&mut (*buf).mutex);
-        }
+            // rust does not actually "move" the `InnerData` into the memory location where the raw pointer `layout` points to
+            // yes this is a trap here(in fact, it just memcpy it rather than move), that's why we use a `ManuallyDrop` to ensure the heap allocated `InnerData` will
+            // not be dropped upon goes out of scope, since we will drop it manually in `Locked::drop()`
+            *layout = InnerData {
+                mutex: ManuallyDrop::new(M::new()),
+                data,
+            };
+        };
 
         Ok(Self {
-            inner: NonNull::new(buf).unwrap(),
+            inner: NonNull::new(layout).expect("can not allocate memory for Locked<T,M>"),
         })
     }
 
+    /// returns a `MutexGuard` for exclusive access
+    ///
+    /// the caller can gain a mutable or immutable ref to `T` through `MutexGuard`</br>
+    /// the `MutexGuard` implement both `Deref` and `DerefMut` to ensure this
     pub fn lock(&self) -> Result<MutexGuard<'_, T, M>, NtError> {
         if !M::irql_ok() {
             Err(NtError::from(STATUS_UNSUCCESSFUL))
         } else {
-            unsafe { (*self.inner.as_ptr()).mutex.lock() };
-
-            Ok(MutexGuard { locker: self })
+            Ok(MutexGuard::new(self))
         }
     }
 
+    /// returns a `MutexGuard` for shared access
+    ///
+    /// the caller can only gain a immutable ref of `T` through `MutexGuard`</br>
+    /// perhaps we need a some type like `SharedMutexGuard` that only implements `Deref`
     pub fn lock_shared(&self) -> Result<MutexGuard<'_, T, M>, NtError> {
         if !M::irql_ok() {
             Err(NtError::from(STATUS_UNSUCCESSFUL))
@@ -352,7 +480,7 @@ impl<T, M: Mutex> Drop for Locked<T, M> {
         unsafe {
             drop_in_place(&mut self.inner.as_mut().data);
 
-            drop_in_place(&mut self.inner.as_mut().mutex);
+            ManuallyDrop::drop(&mut self.inner.as_mut().mutex);
 
             ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
         }
@@ -369,6 +497,14 @@ pub struct MutexGuard<'a, T, M: Mutex> {
     locker: &'a Locked<T, M>,
 }
 
+impl<'a, T, M: Mutex> MutexGuard<'a, T, M> {
+    fn new(locker: &'a Locked<T, M>) -> Self {
+        unsafe { (*locker.inner.as_ptr()).mutex.lock() };
+
+        Self { locker }
+    }
+}
+
 impl<'a, T, M: Mutex> Deref for MutexGuard<'a, T, M> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
@@ -376,6 +512,7 @@ impl<'a, T, M: Mutex> Deref for MutexGuard<'a, T, M> {
     }
 }
 
+// TODO: `DerefMut` will be implemented only if `M` is shareable, but how to do this ?
 impl<'a, T, M: Mutex> DerefMut for MutexGuard<'a, T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.locker.inner.as_ptr()).data }
@@ -399,8 +536,8 @@ pub struct QueuedEmptyMutex;
 impl QueuedMutex for QueuedEmptyMutex {
     type Target = Self;
 
-    fn init(this: &mut Self::Target) {
-        let _ = this;
+    fn new() -> Self::Target {
+        Self
     }
 
     fn lock(&self, handle: PKLOCK_QUEUE_HANDLE) {
@@ -413,38 +550,51 @@ impl QueuedMutex for QueuedEmptyMutex {
 }
 
 pub struct QueuedSpinMutex {
-    inner: UnsafeCell<KSPIN_LOCK>,
+    inner: NonNull<KSPIN_LOCK>,
 }
 
 struct QueuedInnerData<T, M: QueuedMutex> {
-    mutex: M::Target,
+    mutex: ManuallyDrop<M::Target>,
     data: T,
 }
 
 /// a strategy lock wrapper for Queued Spin Locks
+///
+/// a Queued Spin Lock is a special spin lock that can improve system performance, see
+/// https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/queued-spin-locks for details
+///
+/// # Example
+/// ```
+/// let mut handle = LockedQuueHandle::new();
+/// if let Ok(mut counter) = shared_counter.lock(&mut handle) {
+///     *counter += 1;
+/// }
+/// ```
 pub struct StackQueueLocked<T, M: QueuedMutex> {
     inner: NonNull<QueuedInnerData<T, M>>,
 }
 
 impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
     pub fn new(data: T) -> Result<Self, NtError> {
-        let buf = ex_allocate_pool_zero(
+        let layout = ex_allocate_pool_zero(
             NonPagedPoolNx,
             mem::size_of::<QueuedInnerData<T, M>>() as _,
             MUTEX_TAG,
         ) as *mut QueuedInnerData<T, M>;
 
-        if buf.is_null() {
+        if layout.is_null() {
             return Err(STATUS_INSUFFICIENT_RESOURCES.into());
         }
 
         unsafe {
-            (*buf).data = data;
-            M::init(&mut (*buf).mutex);
-        };
+            *layout = QueuedInnerData {
+                mutex: ManuallyDrop::new(M::new()),
+                data,
+            }
+        }
 
         Ok(Self {
-            inner: NonNull::new(buf).unwrap(),
+            inner: NonNull::new(layout).unwrap(),
         })
     }
 
@@ -478,7 +628,7 @@ impl<T, M: QueuedMutex> Drop for StackQueueLocked<T, M> {
         unsafe {
             drop_in_place(&mut (*self.inner.as_ptr()).data);
 
-            drop_in_place(&mut (*self.inner.as_ptr()).mutex);
+            ManuallyDrop::drop(&mut self.inner.as_mut().mutex);
 
             ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
         }
@@ -523,7 +673,10 @@ impl<'a, T, M: QueuedMutex> Drop for InStackMutexGuard<'a, T, M> {
     }
 }
 
+unsafe impl<T, M: Mutex> Send for Locked<T, M> {}
 unsafe impl<T, M: Mutex> Sync for Locked<T, M> {}
+
+unsafe impl<T, M: QueuedMutex> Send for StackQueueLocked<T, M> {}
 unsafe impl<T, M: QueuedMutex> Sync for StackQueueLocked<T, M> {}
 
 pub type GuardLocked<T> = Locked<T, GuardedMutex>;
