@@ -110,4 +110,13 @@ impl<T, F> Drop for LazyOnce<T, F> {
     }
 }
 
-unsafe impl<T: Sync + Send, F: Send> Sync for LazyOnce<T, F> {}
+// Safety
+// we DO NOT constraint the `T` with `Sync + Send` because some native kernel structs
+// contains raw pointers which neither be marked as `Sync` or `Send` by default and thus can not be
+// wrapped in LazyOnce which whill fail the compile-time checking
+// 
+// Note
+// it is the caller's responsibility to ensure that the raw pointers in `T` can be access safely among multi-thread
+//
+// unsafe impl<T: Sync + Send, F: Send> Sync for LazyOnce<T, F> {}
+unsafe impl<T, F: Send> Sync for LazyOnce<T, F>{}
