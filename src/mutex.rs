@@ -704,10 +704,10 @@ impl<'a, T, M: QueuedMutex> Drop for InStackMutexGuard<'a, T, M> {
     }
 }
 
-unsafe impl<T, M: Mutex> Send for Locked<T, M> {}
+unsafe impl<T: Send, M: Mutex> Send for Locked<T, M> {}
 unsafe impl<T, M: Mutex> Sync for Locked<T, M> {}
 
-unsafe impl<T, M: QueuedMutex> Send for StackQueueLocked<T, M> {}
+unsafe impl<T: Send, M: QueuedMutex> Send for StackQueueLocked<T, M> {}
 unsafe impl<T, M: QueuedMutex> Sync for StackQueueLocked<T, M> {}
 
 pub type GuardLocked<T> = Locked<T, GuardedMutex>;
