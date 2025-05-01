@@ -50,7 +50,7 @@ impl<T, F: FnOnce() -> T> LazyOnce<T, F> {
                 atomic::Ordering::Relaxed,
             ) {
                 assert_eq!(old_value, State::Uninit as _);
-                
+
                 unsafe {
                     let data = &mut (*this.data.get());
 
@@ -64,8 +64,9 @@ impl<T, F: FnOnce() -> T> LazyOnce<T, F> {
                         State::Initializing as _,
                         State::Initialized as _,
                         atomic::Ordering::Release,
-                        atomic::Ordering::Relaxed);
-                        
+                        atomic::Ordering::Relaxed,
+                    );
+
                     return &(*this.data.get()).value;
                 }
             } else {
@@ -85,7 +86,7 @@ impl<T, F: FnOnce() -> T> LazyOnce<T, F> {
     }
 }
 
-impl<T, F: FnMut() -> T> Deref for LazyOnce<T, F> {
+impl<T, F: FnOnce() -> T> Deref for LazyOnce<T, F> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         Self::force(self)
