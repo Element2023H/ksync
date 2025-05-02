@@ -16,7 +16,7 @@ union Data<T, F> {
 /// # Safety
 /// - ensure only one thread can only initialize `T` once, other thread must wait until the initializing completed
 /// thus no data race occurred during initializing progress
-/// - ensure only shared refs can be gained, so it can be shared between multi-threads
+/// - ensure only shared refs can be gained from a `LazyOnce`, so it can be shared between multi-threads
 /// 
 /// # Example
 /// ```
@@ -62,7 +62,7 @@ impl<T, F: FnOnce() -> T> LazyOnce<T, F> {
         }
     }
 
-    /// # Description
+    /// # Synopsis
     /// use this method to drop `T` inside a `LazyOnce`</br>
     /// `LazyOnce` will not be automatically dropped in kernel programming since kernel leaks something like CRT runtime code</br>
     /// NOR do we can use the `into_inner()` semantics here since rust forbidden move out of static `LazyOnce`
