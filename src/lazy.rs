@@ -257,6 +257,18 @@ impl<T, F: FnOnce() -> T> LazyStatic<T, F> {
         }
     }
 
+    /// be careful to use this method since it expose a mutable reference to the caller
+    /// 
+    /// but it is convenient to transfer address of inside `T` to other native fucntions
+    pub unsafe fn get_mut(&self) -> Option<&mut T> {
+        let state = unsafe { &mut *self.state.get() };
+
+        match state {
+            State::Init(data) => Some(data),
+            _ => None
+        }
+    }
+
     /// Safety:
     /// 
     /// it is the caller's responsibility to call force() in signle-thread mode to avoid data race
@@ -266,6 +278,19 @@ impl<T, F: FnOnce() -> T> LazyStatic<T, F> {
         match state {
             State::Init(data) => data,
             State::Uninit(_) => unsafe { LazyStatic::really_init(this) },
+            State::Poisoned => {
+                panic!("LazyStatic is in poisoned state, maybe it has been used incorrectly")
+            }
+        }
+    }
+
+    #[cfg(feature = "enable_mut_lazystatic")]
+    pub unsafe fn force_mut(this: &LazyStatic<T, F>) -> &mut T {
+        let state = unsafe { &mut *this.state.get() };
+
+        match state {
+            State::Init(data) => data,
+            State::Uninit(_) => unsafe { LazyStatic::really_init_mut(this) },
             State::Poisoned => {
                 panic!("LazyStatic is in poisoned state, maybe it has been used incorrectly")
             }
@@ -284,6 +309,27 @@ impl<T, F: FnOnce() -> T> LazyStatic<T, F> {
         unsafe { this.state.get().write(State::Init(data)) };
 
         let state = unsafe { &*this.state.get() };
+
+        let State::Init(data) = state else {
+            unreachable!()
+        };
+
+        data
+    }
+    
+    #[cfg(feature = "enable_mut_lazystatic")]
+    unsafe fn really_init_mut(this: &LazyStatic<T, F>) -> &mut T {
+        let state = unsafe { &mut *this.state.get() };
+
+        let State::Uninit(f) = mem::replace(state, State::Poisoned) else {
+            unreachable!()
+        };
+
+        let data = f();
+
+        unsafe { this.state.get().write(State::Init(data)) };
+
+        let state = unsafe { &mut *this.state.get() };
 
         let State::Init(data) = state else {
             unreachable!()

@@ -14,6 +14,7 @@ wdk-sys = "0.3.0"
 
 [features]
 nightly = ["wdk/nightly", "wdk-sys/nightly"]
+enable_mut_lazystatic = []
 
 [build-dependencies]
 wdk-build = "0.3.0"
