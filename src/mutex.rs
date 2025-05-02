@@ -15,9 +15,11 @@ use wdk_sys::{
         ExAcquireFastMutex, ExAcquireResourceExclusiveLite, ExAcquireResourceSharedLite,
         ExDeleteResourceLite, ExFreePoolWithTag, ExInitializeResourceLite, ExReleaseFastMutex,
         ExReleaseResourceLite, ExTryToAcquireFastMutex, KeAcquireGuardedMutex,
-        KeAcquireInStackQueuedSpinLock, KeAcquireSpinLockRaiseToDpc, KeGetCurrentIrql,
+        KeAcquireInStackQueuedSpinLock, KeAcquireInStackQueuedSpinLockAtDpcLevel,
+        KeAcquireSpinLockAtDpcLevel, KeAcquireSpinLockRaiseToDpc, KeGetCurrentIrql,
         KeInitializeEvent, KeInitializeGuardedMutex, KeInitializeSpinLock, KeReleaseGuardedMutex,
-        KeReleaseInStackQueuedSpinLock, KeReleaseSpinLock, KeTryToAcquireGuardedMutex,
+        KeReleaseInStackQueuedSpinLock, KeReleaseInStackQueuedSpinLockFromDpcLevel,
+        KeReleaseSpinLock, KeReleaseSpinLockFromDpcLevel, KeTryToAcquireGuardedMutex,
         KeTryToAcquireSpinLockAtDpcLevel, memset,
     },
 };
@@ -120,6 +122,22 @@ pub struct ResourceMutex {
     inner: NonNull<ERESOURCE>,
 }
 
+/// A Wrapp for kernel Spin lock
+///
+/// # Safety Warning:
+/// be careful when use one spin lock at both HIGH_LEVEL and DISPATCH_LEVEL
+/// spin locks are generally not recommended for use at both HIGH_LEVEL and DISPATCH_LEVEL IRQLs.
+/// While they can be used at or below DISPATCH_LEVEL, their use at HIGH_LEVEL is limited and can lead to potential issues.
+///
+/// HIGH_LEVEL is a hardware interrupt while DISPATCH_LEVEL is software interrupt.
+/// thread switching is not enabled on IRQL >= DISPATCH_LEVEL.
+/// the critical reason for the above is that code running on lower IRQL can be premmited by that running on a higher IRQL
+/// and thus may cause deadlocks and data corruption
+///
+/// as u can see this type permit to used at different IRQL without any constraints, that is ***NOT*** to say u can safely use it concurrently at high IRQL and lower IRQL
+/// the design of this interface is only for cover the programmable senmentics provided by Microsoft
+///
+/// the same rules applied for Queued Spin locks
 pub struct SpinMutex {
     inner: NonNull<SpinLockInner>,
 }
@@ -316,29 +334,47 @@ impl Mutex for SpinMutex {
     }
 
     fn try_lock(&self) -> bool {
-        unsafe { KeTryToAcquireSpinLockAtDpcLevel(&mut (*self.inner.as_ptr()).lock) != 0 }
+        if unsafe { KeGetCurrentIrql() } == DISPATCH_LEVEL as _ {
+            unsafe { KeTryToAcquireSpinLockAtDpcLevel(&mut (*self.inner.as_ptr()).lock) != 0 }
+        } else {
+            false
+        }
     }
 
+    /// a spin lock can be used in IRQL >= DISPATCH_LEVEL and a more efficient function provided by Microsoft
+    ///
+    /// see https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquirespinlockatdpclevel for details
     fn lock(&self) {
         unsafe {
             let inner = &mut (*self.inner.as_ptr());
 
-            inner.irql = KeAcquireSpinLockRaiseToDpc(&mut inner.lock);
+            let irql = KeGetCurrentIrql();
+
+            if irql >= DISPATCH_LEVEL as _ {
+                KeAcquireSpinLockAtDpcLevel(&mut inner.lock);
+            } else {
+                inner.irql = KeAcquireSpinLockRaiseToDpc(&mut inner.lock);
+            }
         }
     }
 
     fn unlock(&self) {
         unsafe {
-            KeReleaseSpinLock(
-                &mut (*self.inner.as_ptr()).lock,
-                (*self.inner.as_ptr()).irql,
-            );
+            let inner = &mut (*self.inner.as_ptr());
+
+            let irql = KeGetCurrentIrql();
+
+            if irql >= DISPATCH_LEVEL as _ {
+                KeReleaseSpinLockFromDpcLevel(&mut inner.lock);
+            } else {
+                KeReleaseSpinLock(&mut inner.lock, inner.irql);
+            }
         }
     }
 
-    // KeAcquireSpinLock can only be called at IRQL <= DISPATCH_LEVEL
+    /// a spin lock can safely be held at any IRQL
     fn irql_ok() -> bool {
-        unsafe { KeGetCurrentIrql() <= DISPATCH_LEVEL as u8 }
+        true
     }
 }
 
@@ -367,14 +403,36 @@ impl QueuedMutex for QueuedSpinMutex {
         }
     }
 
+    /// a queued spin lock can be safely held at IRQL >= DISPATCH_LEVEL
+    ///
+    /// see https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquireinstackqueuedspinlockatdpclevel for details
     fn lock(&self, handle: PKLOCK_QUEUE_HANDLE) {
-        unsafe { KeAcquireInStackQueuedSpinLock(self.inner.as_ptr(), handle) }
+        let irql = unsafe { KeGetCurrentIrql() };
+
+        if irql >= DISPATCH_LEVEL as _ {
+            unsafe {
+                KeAcquireInStackQueuedSpinLockAtDpcLevel(self.inner.as_ptr(), handle);
+            }
+        } else {
+            unsafe { KeAcquireInStackQueuedSpinLock(self.inner.as_ptr(), handle) }
+        }
     }
 
     fn unlock(&self, handle: PKLOCK_QUEUE_HANDLE) {
-        unsafe {
-            KeReleaseInStackQueuedSpinLock(handle);
+        let irql = unsafe { KeGetCurrentIrql() };
+
+        if irql >= DISPATCH_LEVEL as _ {
+            unsafe {
+                KeReleaseInStackQueuedSpinLockFromDpcLevel(handle);
+            }
+        } else {
+            unsafe { KeReleaseInStackQueuedSpinLock(handle) };
         }
+    }
+
+    /// a queued spin lock can be safely held at any IRQL
+    fn irql_ok() -> bool {
+        true
     }
 }
 
@@ -465,7 +523,7 @@ impl<T, M: Mutex> Locked<T, M> {
     /// the caller can only gain a immutable ref of `T` through `MutexGuard`
     ///
     /// ***NOTE***:
-    /// 
+    ///
     /// maybe we need a some type like `SharedMutexGuard` that only implements `Deref`?
     /// but i think using compile-time constant here is a good choice
     pub fn lock_shared(&self) -> Result<MutexGuard<'_, false, T, M>, NtError> {
@@ -506,12 +564,12 @@ impl<T: Display, M: Mutex> Debug for Locked<T, M> {
 
 /// An RAII implementation of a "scoped lock" of a mutex. When this structure is
 /// dropped (falls out of scope), the lock will be unlocked.
-/// 
+///
 /// # Parameters
 /// - EXCLUSIVE: indicates if the lock should be held exclusive
 /// - T: the procted data type
 /// - M: the underlying mutex
-/// 
+///
 /// # SAFETY
 /// the protected `T` can be borrowed as mutable only if the lock can be held exclusively</br>
 /// otherwise it is an error and the `DerefMut()` will panic
@@ -580,6 +638,7 @@ impl QueuedMutex for QueuedEmptyMutex {
     }
 }
 
+/// see `SpinMutex` for details
 pub struct QueuedSpinMutex {
     inner: NonNull<KSPIN_LOCK>,
 }
