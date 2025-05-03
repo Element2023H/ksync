@@ -284,6 +284,18 @@ impl<T, F: FnOnce() -> T> LazyStatic<T, F> {
         }
     }
 
+    pub fn drop(this: &LazyStatic<T, F>) {
+        let state = unsafe { &mut *this.state.get() };
+
+        match state {
+            State::Uninit(_) | State::Init(_) => unsafe {
+                drop_in_place(state);
+                ptr::write(state, State::Poisoned);
+            },
+            _ => panic!()
+        }
+    }
+    
     #[cfg(feature = "enable_mut_lazystatic")]
     pub unsafe fn force_mut(this: &LazyStatic<T, F>) -> &mut T {
         let state = unsafe { &mut *this.state.get() };
