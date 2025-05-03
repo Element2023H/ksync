@@ -138,8 +138,8 @@ impl Drop for JoinHandle {
 
 extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
     let ctx: Box<F> = unsafe { Box::from_raw(mem::transmute::<_, *mut F>(context)) };
-
-    (*ctx)();
+    
+    ctx();
 }
 
 pub fn spawn<F: FnOnce()>(f: F) -> Result<JoinHandle, NtError> {
