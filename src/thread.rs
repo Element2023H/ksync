@@ -51,6 +51,12 @@ pub struct JoinHandle {
     exit_status: Option<NTSTATUS>,
 }
 
+impl Default for JoinHandle {
+    fn default() -> Self {
+        Self { handle: ptr::null_mut(), exit_status: None }
+    }
+}
+
 impl JoinHandle {
     pub fn dettach(&mut self) {
         let _ = unsafe { ZwClose(self.handle) };
