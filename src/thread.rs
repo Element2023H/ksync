@@ -1,6 +1,9 @@
-use core::{mem, ptr};
+use core::hash::Hash;
 use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
+use core::{mem, ptr};
 
+use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use wdk::nt_success;
 use wdk_sys::ntddk::ObfDereferenceObject;
@@ -12,6 +15,7 @@ use wdk_sys::{
     PVOID, PsThreadType, STATUS_SUCCESS, THREAD_QUERY_LIMITED_INFORMATION, ULONG,
     ntddk::{KeWaitForSingleObject, ObReferenceObjectByHandle, PsCreateSystemThread, ZwClose},
 };
+use wdk_sys::{HAL_DISPATCH, LARGE_INTEGER};
 
 use crate::NtCurrentProcess;
 use crate::{
@@ -46,33 +50,77 @@ unsafe extern "C" {
 
 }
 
-pub struct JoinHandle {
-    handle: HANDLE,
-    exit_status: Option<NTSTATUS>,
-}
+#[repr(transparent)]
+pub struct OwnedHandle(HANDLE);
 
-impl Default for JoinHandle {
-    fn default() -> Self {
-        Self { handle: ptr::null_mut(), exit_status: None }
+impl OwnedHandle {
+    pub fn as_raw(&self) -> HANDLE {
+        self.0
     }
 }
+
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { ZwClose(self.0) };
+    }
+}
+
+impl Deref for OwnedHandle {
+    type Target = HANDLE;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for OwnedHandle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[repr(transparent)]
+pub struct JoinHandle(OwnedHandle);
 
 impl JoinHandle {
-    pub fn dettach(&mut self) {
-        let _ = unsafe { ZwClose(self.handle) };
-        self.handle = ptr::null_mut();
-    }
-
-    pub fn joinable(&self) -> bool {
-        !self.handle.is_null() && self.is_running()
-    }
-
-    pub fn join(&mut self) -> Result<(), NtError> {
+    pub fn is_finished(&self) -> bool {
         let mut thread: PVOID = ptr::null_mut();
 
         let mut status = unsafe {
             ObReferenceObjectByHandle(
-                self.handle,
+                *self.0,
+                THREAD_QUERY_LIMITED_INFORMATION,
+                *PsThreadType,
+                KernelMode as _,
+                &mut thread,
+                ptr::null_mut(),
+            )
+        };
+
+        if !nt_success(status) {
+            return false;
+        }
+
+        let mut timeout = LARGE_INTEGER { QuadPart: 0 };
+
+        status = unsafe {
+            KeWaitForSingleObject(
+                thread,
+                Executive as _,
+                KernelMode as _,
+                FALSE as _,
+                &mut timeout,
+            )
+        };
+
+        status == STATUS_SUCCESS
+    }
+
+    pub fn join(self) -> Result<NTSTATUS, NtError> {
+        let mut thread: PVOID = ptr::null_mut();
+
+        let mut status = unsafe {
+            ObReferenceObjectByHandle(
+                *self.0,
                 THREAD_QUERY_LIMITED_INFORMATION,
                 *PsThreadType,
                 KernelMode as _,
@@ -103,7 +151,7 @@ impl JoinHandle {
 
         status = unsafe {
             ZwQueryInformationThread(
-                self.handle,
+                *self.0,
                 ThreadBasicInformation as _,
                 &mut info as *mut _ as *mut _,
                 mem::size_of::<THREAD_BASIC_INFORMATION>() as _,
@@ -113,32 +161,13 @@ impl JoinHandle {
 
         cvt(status)?;
 
-        self.exit_status = Some(info.ExitStatus);
-
-        Ok(())
-    }
-
-    /// this method will return None if the thread is still running
-    pub fn exit_status(&self) -> Option<NTSTATUS> {
-        self.exit_status
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.exit_status.is_none()
-    }
-}
-
-impl Drop for JoinHandle {
-    fn drop(&mut self) {
-        if self.joinable() {
-            self.dettach();
-        }
+        Ok(info.ExitStatus)
     }
 }
 
 extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
     let ctx: Box<F> = unsafe { Box::from_raw(mem::transmute::<_, *mut F>(context)) };
-    
+
     ctx();
 }
 
@@ -172,10 +201,7 @@ pub fn spawn<F: FnOnce()>(f: F) -> Result<JoinHandle, NtError> {
         }
     }
 
-    Ok(JoinHandle {
-        handle,
-        exit_status: None,
-    })
+    Ok(JoinHandle(OwnedHandle(handle)))
 }
 
 pub mod this_thread {
@@ -191,7 +217,7 @@ pub mod this_thread {
 
     pub fn sleep(ms: Duration) {
         let mut timeout = LARGE_INTEGER {
-            QuadPart: -1 as i64 * 1_0000 * ms.as_millis() as i64,
+            QuadPart: -1 * ms.as_nanos() as i64 / 100,
         };
 
         unsafe {

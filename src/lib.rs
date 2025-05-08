@@ -3,12 +3,14 @@
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 
-pub mod lock;
 pub mod utils;
 pub mod mutex;
 pub mod lazy;
 pub mod ntstatus;
 pub mod thread;
+
+#[deprecated(since="0.1.1", note="please use `mutex` instead")]
+pub mod lock;
 
 mod constants;
 pub(crate) use constants::*;
@@ -29,7 +31,7 @@ pub mod test {
     extern crate alloc;
 
     pub fn test_thread() {
-        let mut handle = spawn(|| {
+        let handle = spawn(|| {
             for i in 0..10 {
                 println!("thread {:x} is running", this_thread::id());
                 this_thread::sleep(Duration::from_millis(200));
@@ -38,9 +40,9 @@ pub mod test {
         })
         .unwrap();
 
-        handle.join().expect("join tread failed");
+        let exit_status = handle.join().expect("join tread failed");
 
-        println!("thread exit status: {:x}", handle.exit_status().unwrap());
+        println!("thread exit status: {:x}", exit_status);
     }
 
     use alloc::vec::Vec;
@@ -65,7 +67,7 @@ pub mod test {
         }
 
         // wait for all threads to exit
-        for mut h in handles {
+        for h in handles {
             h.join().expect("join thread failed");
         }
 
@@ -92,7 +94,7 @@ pub mod test {
         }
 
         // wait for all threads to exit
-        for mut h in handles {
+        for h in handles {
             h.join().expect("join thread failed");
         }
 
@@ -119,7 +121,7 @@ pub mod test {
         }
 
         // wait for all threads to exit
-        for mut h in handles {
+        for h in handles {
             h.join().expect("join thread failed");
         }
 
@@ -146,7 +148,7 @@ pub mod test {
         }
 
         // wait for all threads to exit
-        for mut h in handles {
+        for h in handles {
             h.join().expect("join thread failed");
         }
 
@@ -175,7 +177,7 @@ pub mod test {
         }
 
         // wait for all threads to exit
-        for mut h in handles {
+        for h in handles {
             h.join().expect("join thread failed");
         }
 

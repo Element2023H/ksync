@@ -1,9 +1,9 @@
 use crate::ntstatus::NtError;
 use core::{
     fmt::{Debug, Display},
-    mem::{self, ManuallyDrop},
+    mem::{self},
     ops::{Deref, DerefMut},
-    ptr::{NonNull, drop_in_place},
+    ptr::{self, NonNull, drop_in_place},
 };
 use wdk_sys::{
     _EVENT_TYPE::SynchronizationEvent,
@@ -135,7 +135,7 @@ pub struct ResourceMutex {
 /// and thus may cause deadlocks and data corruption
 ///
 /// as u can see this type permit to used at different IRQL without any constraints, that is ***NOT*** to say u can safely use it concurrently at high IRQL and lower IRQL
-/// the design of this interface is only for cover the programmable senmentics provided by Microsoft
+/// the design of this interface is only to cover the programmable senmentics provided by Microsoft
 ///
 /// the same rules applied for Queued Spin locks
 pub struct SpinMutex {
@@ -449,7 +449,7 @@ struct InnerData<T, M: Mutex> {
     /// using `ManuallyDrop` here to ensure safety</br>
     /// we must ensure memory consistency in `Mutex` which lives as long as Locked<T, M></br>
     /// it should not be dropped upon it goes out of scope of `Locked::new()`
-    mutex: ManuallyDrop<M::Target>,
+    mutex: M::Target,
     data: T,
 }
 
@@ -465,12 +465,18 @@ struct InnerData<T, M: Mutex> {
 ///     *counter += 1;
 /// }
 /// ```
-/// - shared access
+/// - shared access, the generic parameter `M` must support shared operations
 /// ```
 /// let shared_counter = FastLocked::new(0u32).unwrap();
 /// if let Ok(counter) = shared_counter.lock_shared() {
 ///     println!("counter = {}", counter);
 /// }
+/// ```
+///
+/// - get immutable reference
+/// ```
+/// let shared_counter = FastLocked::new(0u32).unwrap();
+/// println!("counter = {}", shared_counter.get());
 /// ```
 pub struct Locked<T, M>
 where
@@ -492,18 +498,28 @@ impl<T, M: Mutex> Locked<T, M> {
         }
 
         unsafe {
-            // rust does not actually "move" the `InnerData` into the memory location where the raw pointer `layout` points to
-            // yes this is a trap here(in fact, it just memcpy it rather than move), that's why we use a `ManuallyDrop` to ensure the heap allocated `InnerData` will
+            // Rust does not actually "move" the `InnerData` into the memory location where the raw pointer `layout` points to
+            // it copy it instead and then call the drop on temporary `InnerData`
+            // yes this is a trap here, that's why we use a `ptr::write` to ensure the temporary `InnerData` will
             // not be dropped upon it goes out of scope, since we will drop it manually in `Locked::drop()`
-            *layout = InnerData {
-                mutex: ManuallyDrop::new(M::new()),
-                data,
-            };
+            // The following code is wrong, the temporary `InnerData` will be droppd in place which is not we want
+            //*layout = InnerData { ... }
+            ptr::write(
+                layout,
+                InnerData {
+                    mutex: M::new(),
+                    data,
+                },
+            );
         };
 
         Ok(Self {
             inner: NonNull::new(layout).expect("can not allocate memory for Locked<T,M>"),
         })
+    }
+
+    pub fn get(&mut self) -> &mut T {
+        &mut **self
     }
 
     /// returns a `MutexGuard` for exclusive access
@@ -544,12 +560,25 @@ impl<T, M: Mutex> Locked<T, M> {
     }
 }
 
+impl<T, M: Mutex> Deref for Locked<T, M> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &self.inner.as_ref().data }
+    }
+}
+
+impl<T, M: Mutex> DerefMut for Locked<T, M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut self.inner.as_mut().data }
+    }
+}
+
 impl<T, M: Mutex> Drop for Locked<T, M> {
     fn drop(&mut self) {
         unsafe {
             drop_in_place(&mut self.inner.as_mut().data);
 
-            ManuallyDrop::drop(&mut self.inner.as_mut().mutex);
+            drop_in_place(&mut self.inner.as_mut().mutex);
 
             ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
         }
@@ -644,7 +673,7 @@ pub struct QueuedSpinMutex {
 }
 
 struct QueuedInnerData<T, M: QueuedMutex> {
-    mutex: ManuallyDrop<M::Target>,
+    mutex: M::Target,
     data: T,
 }
 
@@ -677,15 +706,22 @@ impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
         }
 
         unsafe {
-            *layout = QueuedInnerData {
-                mutex: ManuallyDrop::new(M::new()),
-                data,
-            }
+            ptr::write(
+                layout,
+                QueuedInnerData {
+                    mutex: M::new(),
+                    data,
+                },
+            );
         }
 
         Ok(Self {
             inner: NonNull::new(layout).unwrap(),
         })
+    }
+
+    pub fn get(&mut self) -> &mut T {
+        &mut **self
     }
 
     pub fn lock<'a>(
@@ -705,6 +741,19 @@ impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
     }
 }
 
+impl<T, M: QueuedMutex> Deref for StackQueueLocked<T, M> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &self.inner.as_ref().data }
+    }
+}
+
+impl<T, M: QueuedMutex> DerefMut for StackQueueLocked<T, M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut self.inner.as_mut().data }
+    }
+}
+
 impl<T: Display, M: QueuedMutex> Debug for StackQueueLocked<T, M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "StackQueueLocked{{{}}}", unsafe {
@@ -718,14 +767,14 @@ impl<T, M: QueuedMutex> Drop for StackQueueLocked<T, M> {
         unsafe {
             drop_in_place(&mut (*self.inner.as_ptr()).data);
 
-            ManuallyDrop::drop(&mut self.inner.as_mut().mutex);
+            drop_in_place(&mut self.inner.as_mut().mutex);
 
             ExFreePoolWithTag(self.inner.as_ptr().cast(), MUTEX_TAG);
         }
     }
 }
 
-#[repr(C)]
+#[repr(transparent)]
 pub struct LockedQuueHandle(KLOCK_QUEUE_HANDLE);
 
 impl LockedQuueHandle {

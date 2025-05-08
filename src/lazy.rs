@@ -2,7 +2,7 @@ use core::{
     cell::UnsafeCell,
     mem::{self, ManuallyDrop},
     ops::Deref,
-    ptr::drop_in_place,
+    ptr::{self, drop_in_place},
     sync::atomic::{self, AtomicU32},
 };
 
@@ -203,12 +203,12 @@ enum State<T, F> {
 /// 
 /// # fetures
 /// - naturally no data race during initialization(caller must follow the safety rules below)
-/// - a `LazyStatic` is memory efficient than a `lazyOnce`, it only require size_of(T) size in memory storage
+/// - a `LazyStatic` is memory efficient than a `lazyOnce`, it only require size_of(T) for memory storage
 /// 
 /// ## Safety
 /// - caller must ensure it to be initialized only once, for example: intialize it in DriverEntry by calling `LazyStatic::force`
 /// - can be shared between multi-threads
-/// - can not obtain a mutable reference through a `LazyStatic`
+/// - can not obtain a mutable reference through a `LazyStatic` unless using `unsafe` block
 /// - no interior mutability once it has been initialized
 /// 
 /// # Note
