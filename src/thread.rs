@@ -165,6 +165,10 @@ impl JoinHandle {
     }
 }
 
+/// trampolion for `F`, using static binding here
+/// 
+/// `F` is inferred as `impl Fn` which rust know it exactly, it is essentially a function pointer.
+/// so the call `ctx()` here will call the function pointer "passed in" from `spawn` method
 extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
     let ctx: Box<F> = unsafe { Box::from_raw(mem::transmute::<_, *mut F>(context)) };
 
@@ -182,7 +186,10 @@ pub fn spawn<F: FnOnce()>(f: F) -> Result<JoinHandle, NtError> {
             ptr::null_mut()
         );
 
+        // `F` is inferred as `impl Fn`
         let buf = Box::new(f);
+
+        // Box will be dropped in `start_routine_stub::<F>`
         let context = Box::into_raw(buf);
 
         let status = PsCreateSystemThread(
