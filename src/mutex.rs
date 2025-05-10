@@ -567,6 +567,7 @@ impl<T, M: Mutex> Deref for Locked<T, M> {
     }
 }
 
+// FIXME: get a mutable reference from a `Locked<T>` is not safe
 impl<T, M: Mutex> DerefMut for Locked<T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut self.inner.as_mut().data }
@@ -748,6 +749,7 @@ impl<T, M: QueuedMutex> Deref for StackQueueLocked<T, M> {
     }
 }
 
+// FIXME: get a mutable reference from a `StackQueueLocked<T>` is not safe
 impl<T, M: QueuedMutex> DerefMut for StackQueueLocked<T, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut self.inner.as_mut().data }
