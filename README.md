@@ -1,7 +1,7 @@
 # ksync
 EN | [中文](./README_CN.md)
 
-rust wrappers for kernel mode thread, FastMutex, GuardMutex, Resources and Queued Spin Locks
+rust wrappers for kernel mode thread, Lazy & Cell, FastMutex, GuardMutex, Resources and Queued Spin Locks
 # Features
 ## Threads
 ```
@@ -16,6 +16,20 @@ thread::this_thread::id()
 
 // yielding
 thread::this_thread::pause()
+```
+## Lazy & Once
+- each has its own respective use cases, and they are different from the std one but acts mostly functionally the same as it
+- `OnceCell`, `OnceLock` can all be used in where the initialization must be delayed out of object construction while `LazyCell` and `LazyLock` can not
+- the `OnceXXX` and `LazyXXX` both implement `Sync` by default without any constraints to `T` to make more flexible in most use cases but break a litte rust scoping rules
+```
+// A value which is initialized on the first access.
+lazy::LazyCell
+// A value which is initialized on the first access with thread-safe guaranty during initiazation
+lazy::LazyLock
+// A cell which can nominally be written to only once.
+lazy::OnceCell
+// A synchronization primitive which can nominally be written to only once.
+lazy::OnceLock
 ```
 ## Mutexs
 ```
