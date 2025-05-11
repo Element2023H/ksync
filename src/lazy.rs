@@ -4,53 +4,67 @@
 //! `OnceCell`, `OnceLock` can all be used in where the initialization must be delayed out of object construction
 //! while `LazyCell` and `LazyLock` can not
 //!
+//! they are all implemented with an associate `drop` method can be used to drop only once
+//! 
 //! - `OnceCell`</br>
+//! delayed initiazation out of construction
 //! can be initialized only once in single thread</br>
-//! can be safely used in multi-thread by get a shared reference to it</br>
+//! can be safely used in multi-thread by get a shared reference to it if inner `T` is `Sync`</br>
 //!
 //! - `OnceLock`</br>
+//! initialized when first accessed
 //! can be safely initialized only once in multi-thread</br>
-//! can be safely used in multi-thread by get a shared reference to it</br>
+//! can be safely used in multi-thread by get a shared reference to it if inner `T` is `Sync`</br>
 //!
 //! - `LazyCell`</br>
+//! delayed initiazation out of construction
 //! can be initialized only once in single thread</br>
-//! can be safely used in multi-thread by get a shared reference to it</br>
+//! can be safely used in multi-thread by get a shared reference to it if inner `T` is `Sync`<</br>
 //!
 //! - `lazyLock`</br>
+//! initialized when first accessed
 //! can be safely initialized only once in multi-thread</br>
-//! can be safely used in multi-thread by get a shared reference to it</br>
+//! can be safely used in multi-thread by get a shared reference to it if inner `T` is `Sync`<</br>
 //!
-//! # Note
-//! ***THE REALITY IS:***</br>
-//! not all the thread-unsafe code can be detected and avoided in compiler-time checking, especially in kernel programming which heavily depends on the emotion of Microsoft
-//!
-//! ***THE JOKE IS:***</br>
-//! Rust, you can not "enfore" user to write that code that "seems" thread unsafe but actually exactly thread safe
-//!
-//! the `Cells` an `Lazys` all implement trait `Sync` by default without any constraints to `T`</br>
-//! but be careful when use it multi-thread circumstances, since it "SHOULD BE" implemented with `Sync` when `T` is `Sync` under rust language semantics</br>
-//!
-//! the benefits of that is if we know a sepice of data only need to be initialized once while may contain some raw pointer that returned from kernel API</br>
-//! and we excatly sure it can be used safely in multi-thread circumstances without any data race(for example we only read the data but not write or call some </br>
-//! API that the thread-safety is already guaranteed by kernel)</br>
-//! it will be convenient for us to define and use a static `Cell` or `Lazy` without emiting the compiler check errors</br>
-//! think of we have to define a static `Cell` like this:
+//! # Noteworthy
+//! As we notice that `OnceCell` and `LazyCell` implement `Sync` if `T` implement `Sync` by default, this only applies to one case:</br>
+//! we have a data piece that we exactly know it need to be delayly initialized only once and will not cause data race(it maintains its own interior mutability) 
+//! when used in multi-thread therefore it can be shared referenced in multi-threads, see following example:</br>
 //! ```
-//! // this will emit compiler errors if `OnceCell` has a form of `impl Sync` like this:
-//! // "unsafe impl<T: Sync> Sync for OnceCell<T> {}"
-//! // SINCE the raw pointer is neither implement `Sync` nor `Send` by default
-//! // but we know sometimes we need global data which contains raw pointer to be shared between multi-thread
-//! static DEVICE: OnceCell<DRIVER_OBJECT> = OnceCell::new();
+//! // LazyLock/lazyCell may not be suitable for these cases
+//! // but OnceCell is more efficient than OnceLock
+//! struct DriverObject(PDRIVER_OBJECT);
+//! unsafe impl Sync for DriverObject {}
+//! 
+//! struct GlobalDriverData {
+//!     // fields that initialized only once
+//!     // ...
+//! }
+//! 
+//! unsafe impl Sync for GlobalDriverData {}
+//! 
+//! // use OnceLock is also ok here
+//! // but we prefer OnceCell since we exactly do not need the "lock" overhead here
+//! static DRIVER: OnceCell<DriverObject> = OnceCell::new();
+//! static GLOBAL_READONLY_DATA: OnceCell<GlobalDriverData> = OnceCell::new();
+//! 
+//! fn initialize_global_data() -> GlobalDriverData {
+//!     // ... do something
+//! }
+//! fn driver_entry(driver: PDRIVER_OBJECT, ...) {
+//!     let driver_object = DRIVER.get_or_init(|| driver);
+//!     // ... do something
+//!     
+//!     GLOBAL_READONLY_DATA.set(initialize_global_data());
+//! }
+//! 
+//! fn driver_unload(...) {
+//!     OnceCell::drop(&DRIVER);
+//!     OnceCell::drop(&GLOBAL_READONLY_DATA)
+//! }
 //! ```
-//!
-//! there is a different case that we may want to read/write the global data when using it in multi-thread
-//! in this case, we can use `Locked<T>` instead, since this two can ensure data can be access safely in multi-thread circumstances
 use core::{
-    cell::UnsafeCell,
-    mem::{self, ManuallyDrop, MaybeUninit},
-    ops::Deref,
-    ptr::{self, drop_in_place},
-    sync::atomic::{self, AtomicU32, Ordering},
+    cell::UnsafeCell, iter::Once, mem::{self, ManuallyDrop, MaybeUninit}, ops::Deref, ptr::{self, drop_in_place}, sync::atomic::{self, AtomicU32, Ordering}
 };
 
 const UNINIT: u32 = 0;
@@ -68,7 +82,7 @@ union Data<T, F> {
 /// - the value is initialized on its accessed
 /// - ensure only one thread can only initialize `T` once, other thread must wait until the initialization completed
 /// thus no data race occurred during initialization
-/// - ensure only shared refs of `T` can be gained from a `LazyLock` unless get mutable `LazyLock`
+/// - ensure only shared refs of `T` can be gained from a `LazyLock` behind a shared reference
 ///
 /// # Example
 /// ```
@@ -238,34 +252,21 @@ impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
     }
 }
 
-// deprecated, not the case in driver
-// `LazyLock` can be used in many cases not only the global static one
-// provide this method for compatible with RAII
-// impl<T, F> Drop for LazyLock<T, F> {
-//     fn drop(&mut self) {
-//         match *self.state.get_mut() {
-//             UNINIT => {
-//                 unsafe { ManuallyDrop::drop(&mut self.data.get_mut().f) };
-//             }
-//             INITIALIZED => {
-//                 unsafe { ManuallyDrop::drop(&mut self.data.get_mut().value) };
-//             }
-//             _ => {}
-//         }
-//     }
-// }
+impl<T, F> Drop for LazyLock<T, F> {
+    fn drop(&mut self) {
+        match *self.state.get_mut() {
+            UNINIT => {
+                unsafe { ManuallyDrop::drop(&mut self.data.get_mut().f) };
+            }
+            INITIALIZED => {
+                unsafe { ManuallyDrop::drop(&mut self.data.get_mut().value) };
+            }
+            _ => {}
+        }
+    }
+}
 
-// Safety
-// we DO NOT constraint the `T` with `Sync + Send` because some native kernel structs
-// contains raw pointers which neither be marked as `Sync` or `Send` by default and thus can not be
-// wrapped in LazyLock which whill fail the compile-time checking
-//
-// Note
-// it is the caller's responsibility to ensure that the raw pointers in `T` can be access safely among multi-thread
-//
-// unsafe impl<T: Sync + Send, F: Send> Sync for LazyLock<T, F> {}
-// unsafe impl<T, F: Send> Sync for LazyLock<T, F> {}
-unsafe impl<T, F: FnOnce() -> T> Sync for LazyLock<T, F> {}
+unsafe impl<T: Sync, F: FnOnce() -> T> Sync for LazyLock<T, F> {}
 
 enum State<T, F> {
     Uninit(F),
@@ -305,6 +306,7 @@ enum State<T, F> {
 ///     }
 /// }
 /// ```
+#[repr(transparent)]
 pub struct LazyCell<T, F = fn() -> T> {
     state: UnsafeCell<State<T, F>>,
 }
@@ -434,8 +436,7 @@ impl<T, F: FnOnce() -> T> Deref for LazyCell<T, F> {
     }
 }
 
-unsafe impl<T, F: FnOnce() -> T> Sync for LazyCell<T, F> {}
-// unsafe impl<T, F: FnOnce() -> T> Send for LazyCell<T, F> {}
+unsafe impl<T: Sync, F: FnOnce() -> T> Sync for LazyCell<T, F> {}
 
 /// A cell which can nominally be written to only once.
 #[repr(transparent)]
@@ -506,7 +507,7 @@ impl<T> OnceCell<T> {
 
 // Safety
 // user must initilize only once, shared between multi-thread through only shared reference
-unsafe impl<T> Sync for OnceCell<T> {}
+unsafe impl<T: Sync> Sync for OnceCell<T> {}
 
 /// A synchronization primitive which can nominally be written to only once.
 pub struct OnceLock<T> {
@@ -663,13 +664,13 @@ impl<T> OnceLock<T> {
     }
 }
 
-// impl<T> Drop for OnceLock<T> {
-//     fn drop(&mut self) {
-//         if self.is_initialized() {
-//             unsafe { (&mut *self.value.get()).assume_init_drop() };
-//         }
-//     }
-// }
+impl<T> Drop for OnceLock<T> {
+    fn drop(&mut self) {
+        if self.is_initialized() {
+            unsafe { (&mut *self.value.get()).assume_init_drop() };
+        }
+    }
+}
 
 // unsafe impl<T> Send for OnceLock<T> {}
-unsafe impl<T> Sync for OnceLock<T> {}
+unsafe impl<T: Sync> Sync for OnceLock<T> {}
