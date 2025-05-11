@@ -132,7 +132,7 @@ pub mod test {
     pub fn test_resouce_lock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = ResouceLocked::new(0u32).unwrap();
+        let shared_counter = ResourceLocked::new(0u32).unwrap();
 
         for _ in 0..4 {
             handles.push(
@@ -183,17 +183,5 @@ pub mod test {
 
         // check the shared counter
         println!("the final value of shared counter is: {:?}", shared_counter);
-    }
-
-    pub fn test_standalone_locks() {
-        let mut counter = 0u32;
-
-        let lock = FastMutex::new();
-
-        if let Ok(_) = lock::UniqueLock::new(&lock) {
-            counter += 1;
-        }
-
-        println!("counter = {}", counter);
     }
 }

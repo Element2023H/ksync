@@ -1,9 +1,7 @@
-use core::hash::Hash;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::{mem, ptr};
 
-use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use wdk::nt_success;
 use wdk_sys::ntddk::ObfDereferenceObject;
@@ -15,7 +13,7 @@ use wdk_sys::{
     PVOID, PsThreadType, STATUS_SUCCESS, THREAD_QUERY_LIMITED_INFORMATION, ULONG,
     ntddk::{KeWaitForSingleObject, ObReferenceObjectByHandle, PsCreateSystemThread, ZwClose},
 };
-use wdk_sys::{HAL_DISPATCH, LARGE_INTEGER};
+use wdk_sys::LARGE_INTEGER;
 
 use crate::NtCurrentProcess;
 use crate::{
