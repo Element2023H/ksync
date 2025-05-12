@@ -343,6 +343,8 @@ struct InnerData<T, M: Mutex> {
 ///
 /// it is used combined with FastMutex, GuardedMutex, SpinMutex, and ResourceMutex types
 ///
+/// see https://doc.rust-lang.org/std/sync/struct.Mutex.html for details
+///
 /// # Example
 /// - unique access
 /// ```
@@ -351,7 +353,7 @@ struct InnerData<T, M: Mutex> {
 ///     *counter += 1;
 /// }
 /// ```
-/// - shared access, the generic parameter `M` must support shared operations
+/// - shared access, `M` must implement shared operations
 /// ```
 /// let shared_counter = FastLocked::new(0u32).unwrap();
 /// if let Ok(counter) = shared_counter.lock_shared() {
@@ -359,10 +361,10 @@ struct InnerData<T, M: Mutex> {
 /// }
 /// ```
 ///
-/// - get immutable reference
+/// - dereference
 /// ```
 /// let shared_counter = FastLocked::new(0u32).unwrap();
-/// println!("counter = {}", shared_counter.get());
+/// println!("counter = {}", *shared_counter);
 /// ```
 pub struct Locked<T, M>
 where
@@ -401,8 +403,25 @@ impl<T, M: Mutex> Locked<T, M> {
         })
     }
 
-    pub fn get(&mut self) -> &mut T {
-        &mut **self
+    /// Returns a mutable reference to the underlying data.
+    ///
+    /// # Safety
+    /// Since this call borrows the Mutex mutably, no actual locking needs to take place – the mutable borrow statically guarantees no locks exist.
+    /// a `&mut T` can not be used across thread bound, since `thread::spawn` requires `FnOne() + 'static`
+    pub fn get_mut(&mut self) -> &mut T {
+        unsafe { &mut self.inner.as_mut().data }
+    }
+
+    /// Set the inner value with `value`
+    pub fn set(&mut self, value: T) {
+        unsafe { self.inner.as_mut().data = value }
+    }
+
+    pub fn get_cloned(&self) -> Result<T, NtError>
+    where
+        T: Clone,
+    {
+        self.lock().map(|v| v.clone())
     }
 
     /// returns a `MutexGuard` for exclusive access
@@ -439,6 +458,33 @@ impl<T, M: Mutex> Locked<T, M> {
             } else {
                 Ok(MutexGuard { locker: self })
             }
+        }
+    }
+}
+
+impl<T, M> Default for Locked<T, M>
+where
+    T: Default,
+    M: Mutex,
+{
+    fn default() -> Self {
+        let layout = ex_allocate_pool_zero(
+            NonPagedPoolNx,
+            mem::size_of::<InnerData<T, M>>() as _,
+            MUTEX_TAG,
+        ) as *mut InnerData<T, M>;
+
+        if layout.is_null() {
+            panic!("No Sufficient Memory")
+        }
+
+        unsafe {
+            let _ = layout.as_mut().unwrap().mutex.init().inspect_err(|_| panic!("Mutex failed to initialize"));
+            layout.as_mut().unwrap().data = Default::default();
+        };
+
+        Self {
+            inner: NonNull::new(layout).unwrap(),
         }
     }
 }
@@ -590,15 +636,30 @@ impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
 
         unsafe { layout.as_mut().unwrap().mutex.init() }?;
 
-        unsafe { ptr::write(&mut (*layout).data, data); }
+        unsafe {
+            ptr::write(&mut (*layout).data, data);
+        }
 
         Ok(Self {
             inner: NonNull::new(layout).unwrap(),
         })
     }
 
-    pub fn get(&mut self) -> &mut T {
-        &mut **self
+    pub fn get_mut(&mut self) -> &mut T {
+        unsafe { &mut self.inner.as_mut().data }
+    }
+
+    pub fn set(&mut self, value: T) {
+        unsafe { self.inner.as_mut().data = value };
+    }
+
+    pub fn get_cloned(&self) -> Result<T, NtError>
+    where
+        T: Clone,
+    {
+        let mut handle = LockedQuueHandle::new();
+
+        self.lock(&mut handle).map(|v| v.clone())
     }
 
     pub fn lock<'a>(
@@ -614,6 +675,33 @@ impl<T, M: QueuedMutex> StackQueueLocked<T, M> {
                 handle,
                 locker: self,
             })
+        }
+    }
+}
+
+impl<T, M> Default for StackQueueLocked<T, M>
+where
+    T: Default,
+    M: QueuedMutex,
+{
+    fn default() -> Self {
+        let layout = ex_allocate_pool_zero(
+            NonPagedPoolNx,
+            mem::size_of::<QueuedInnerData<T, M>>() as _,
+            MUTEX_TAG,
+        ) as *mut QueuedInnerData<T, M>;
+
+        if layout.is_null() {
+            panic!("No Sufficient Memory")
+        }
+
+        unsafe {
+            let _ = layout.as_mut().unwrap().mutex.init().inspect_err(|_| panic!("Mutex failed to initialize"));
+            layout.as_mut().unwrap().data = Default::default();
+        };
+
+        Self {
+            inner: NonNull::new(layout).unwrap(),
         }
     }
 }
