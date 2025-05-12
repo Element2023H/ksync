@@ -4,6 +4,7 @@ use core::{mem, ptr};
 
 use alloc::boxed::Box;
 use wdk::nt_success;
+use wdk_sys::LARGE_INTEGER;
 use wdk_sys::ntddk::ObfDereferenceObject;
 use wdk_sys::{
     _KWAIT_REASON::Executive,
@@ -13,7 +14,6 @@ use wdk_sys::{
     PVOID, PsThreadType, STATUS_SUCCESS, THREAD_QUERY_LIMITED_INFORMATION, ULONG,
     ntddk::{KeWaitForSingleObject, ObReferenceObjectByHandle, PsCreateSystemThread, ZwClose},
 };
-use wdk_sys::LARGE_INTEGER;
 
 use crate::NtCurrentProcess;
 use crate::{
@@ -164,7 +164,7 @@ impl JoinHandle {
 }
 
 /// trampolion for `F`, using static binding here
-/// 
+///
 /// `F` is inferred as `impl Fn` which rust know it exactly, it is essentially a function pointer.
 /// so the call `ctx()` here will call the function pointer "passed in" from `spawn` method
 extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
@@ -173,7 +173,7 @@ extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
     ctx();
 }
 
-pub fn spawn<F: FnOnce() + 'static>(f: F) -> Result<JoinHandle, NtError> {
+pub fn spawn<F: FnOnce() + Send + 'static>(f: F) -> Result<JoinHandle, NtError> {
     let mut handle: HANDLE = ptr::null_mut();
 
     unsafe {
