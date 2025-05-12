@@ -633,7 +633,7 @@ impl<T> OnceLock<T> {
     ///
     /// # Safety
     /// - user must call this method only once
-    /// - it can never be used after calling `drop` on this object
+    /// - user must ensure it can never be used after `drop`
     ///
     /// # Example
     ///
