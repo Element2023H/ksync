@@ -173,7 +173,7 @@ extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
     ctx();
 }
 
-pub fn spawn<F: FnOnce()>(f: F) -> Result<JoinHandle, NtError> {
+pub fn spawn<F: FnOnce() + 'static>(f: F) -> Result<JoinHandle, NtError> {
     let mut handle: HANDLE = ptr::null_mut();
 
     unsafe {

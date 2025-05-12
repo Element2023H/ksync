@@ -21,6 +21,7 @@ extern crate alloc;
 pub mod test {
     use core::time::Duration;
 
+    use alloc::sync::Arc;
     use wdk::println;
 
     use crate::lock;
@@ -50,14 +51,16 @@ pub mod test {
     pub fn test_guard_mutex() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = GuardLocked::new(0u32).unwrap();
+        let shared_counter = Arc::new(GuardLocked::new(0u32).unwrap());
 
         for _ in 0..4 {
+            let counter = shared_counter.clone();
+
             handles.push(
-                spawn(|| {
+                spawn(move || {
                     for i in 0..100 {
-                        if let Ok(mut counter) = shared_counter.lock() {
-                            *counter += 1;
+                        if let Ok(mut guard) = counter.lock() {
+                            *guard += 1;
                             // this_thread::sleep(Duration::from_millis(i));
                         }
                     }
@@ -72,20 +75,22 @@ pub mod test {
         }
 
         // check the shared counter
-        println!("the final value of shared counter is: {:?}", shared_counter);
+        println!("the final value of shared counter is: {:?}", **shared_counter);
     }
 
     pub fn test_fast_mutex() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = FastLocked::new(0u32).unwrap();
+        let shared_counter = Arc::new(FastLocked::new(0u32).unwrap());
 
         for _ in 0..4 {
+            let counter = shared_counter.clone();
+
             handles.push(
-                spawn(|| {
+                spawn(move || {
                     for i in 0..100 {
-                        if let Ok(mut counter) = shared_counter.lock() {
-                            *counter += 1;
+                        if let Ok(mut guard) = counter.lock() {
+                            *guard += 1;
                         }
                     }
                 })
@@ -99,20 +104,22 @@ pub mod test {
         }
 
         // check the shared counter
-        println!("the final value of shared counter is: {:?}", shared_counter);
+        println!("the final value of shared counter is: {:?}", **shared_counter);
     }
 
     pub fn test_spinlock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = SpinLocked::new(0u32).unwrap();
+        let shared_counter = Arc::new(SpinLocked::new(0u32).unwrap());
 
         for _ in 0..4 {
+            let counter = shared_counter.clone();
+
             handles.push(
-                spawn(|| {
+                spawn(move || {
                     for i in 0..100 {
-                        if let Ok(mut counter) = shared_counter.lock() {
-                            *counter += 1;
+                        if let Ok(mut guard) = counter.lock() {
+                            *guard += 1;
                         }
                     }
                 })
@@ -126,20 +133,22 @@ pub mod test {
         }
 
         // check the shared counter
-        println!("the final value of shared counter is: {:?}", shared_counter);
+        println!("the final value of shared counter is: {:?}", **shared_counter);
     }
 
     pub fn test_resouce_lock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = ResourceLocked::new(0u32).unwrap();
+        let shared_counter = Arc::new(ResourceLocked::new(0u32).unwrap());
 
         for _ in 0..4 {
+            let counter = shared_counter.clone();
+
             handles.push(
-                spawn(|| {
+                spawn(move || {
                     for i in 0..100 {
-                        if let Ok(mut counter) = shared_counter.lock() {
-                            *counter += 1;
+                        if let Ok(mut guard) = counter.lock() {
+                            *guard += 1;
                         }
                     }
                 })
@@ -153,22 +162,24 @@ pub mod test {
         }
 
         // check the shared counter
-        println!("the final value of shared counter is: {:?}", shared_counter);
+        println!("the final value of shared counter is: {:?}", **shared_counter);
     }
 
     pub fn test_queued_spin_lock() {
         let mut handles: Vec<JoinHandle> = Vec::new();
 
-        let shared_counter = InStackQueueLocked::new(0u32).unwrap();
+        let shared_counter = Arc::new(InStackQueueLocked::new(0u32).unwrap());
 
         for _ in 0..4 {
+            let counter = shared_counter.clone();
+
             handles.push(
-                spawn(|| {
+                spawn(move || {
                     for _ in 0..1000 {
                         let mut handle = LockedQuueHandle::new();
 
-                        if let Ok(mut counter) = shared_counter.lock(&mut handle) {
-                            *counter += 1;
+                        if let Ok(mut guard) = counter.lock(&mut handle) {
+                            *guard += 1;
                         }
                     }
                 })
@@ -182,6 +193,7 @@ pub mod test {
         }
 
         // check the shared counter
-        println!("the final value of shared counter is: {:?}", shared_counter);
+        println!("the final value of shared counter is: {:?}", **shared_counter);
     }
+
 }
