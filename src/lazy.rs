@@ -5,7 +5,7 @@
 //! while `LazyCell` and `LazyLock` can not
 //!
 //! they are all implemented with an associate `drop` method can be used to drop only once
-//! 
+//!
 //! - `OnceCell`</br>
 //! delayed initiazation out of construction
 //! can be initialized only once in single thread</br>
@@ -28,26 +28,26 @@
 //!
 //! # Noteworthy
 //! As we notice that `OnceCell` and `LazyCell` implement `Sync` if `T` implement `Sync` by default, this only applies to one case:</br>
-//! we have a data piece that we exactly know it need to be delayly initialized only once and will not cause data race(it maintains its own interior mutability) 
+//! we have a data piece that we exactly know it need to be delayly initialized only once and will not cause data race(it maintains its own interior mutability)
 //! when used in multi-thread therefore it can be shared referenced in multi-threads, see following example:</br>
 //! ```
 //! // LazyLock/lazyCell may not be suitable for these cases
 //! // but OnceCell is more efficient than OnceLock
 //! struct DriverObject(PDRIVER_OBJECT);
 //! unsafe impl Sync for DriverObject {}
-//! 
+//!
 //! struct GlobalDriverData {
 //!     // fields that initialized only once
 //!     // ...
 //! }
-//! 
+//!
 //! unsafe impl Sync for GlobalDriverData {}
-//! 
+//!
 //! // use OnceLock is also ok here
 //! // but we prefer OnceCell since we exactly do not need the "lock" overhead here
 //! static DRIVER: OnceCell<DriverObject> = OnceCell::new();
 //! static GLOBAL_READONLY_DATA: OnceCell<GlobalDriverData> = OnceCell::new();
-//! 
+//!
 //! fn initialize_global_data() -> GlobalDriverData {
 //!     // ... do something
 //! }
@@ -57,19 +57,21 @@
 //!     
 //!     GLOBAL_READONLY_DATA.set(initialize_global_data());
 //! }
-//! 
+//!
 //! fn driver_unload(...) {
 //!     OnceCell::drop(&DRIVER);
 //!     OnceCell::drop(&GLOBAL_READONLY_DATA)
 //! }
 //! ```
 use core::{
-    cell::UnsafeCell, iter::Once, mem::{self, ManuallyDrop, MaybeUninit}, ops::Deref, ptr::{self, drop_in_place}, sync::atomic::{self, AtomicU32, Ordering}
+    cell::UnsafeCell,
+    mem::{self, ManuallyDrop, MaybeUninit},
+    ops::Deref,
+    ptr::{self, drop_in_place},
+    sync::atomic::{self, AtomicU32, Ordering},
 };
 
-const UNINIT: u32 = 0;
-const INITIALIZING: u32 = 1;
-const INITIALIZED: u32 = 2;
+use crate::once::{CallState, Once};
 
 union Data<T, F> {
     value: ManuallyDrop<T>,
@@ -109,15 +111,14 @@ union Data<T, F> {
 /// see `Locked<T>` for details
 /// ```
 pub struct LazyLock<T, F = fn() -> T> {
-    state: AtomicU32,
-
+    once: UnsafeCell<Once<T>>,
     data: UnsafeCell<Data<T, F>>,
 }
 
 impl<T, F: FnOnce() -> T> LazyLock<T, F> {
     pub const fn new(f: F) -> Self {
         Self {
-            state: AtomicU32::new(UNINIT),
+            once: UnsafeCell::new(Once::new()),
             data: UnsafeCell::new(Data {
                 f: ManuallyDrop::new(f),
             }),
@@ -125,66 +126,66 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
     }
 
     #[inline]
-    fn get_state(&self) -> u32 {
-        self.state.load(atomic::Ordering::Relaxed)
+    fn get_once(&self) -> &Once<T> {
+        unsafe { &*self.once.get() }
+    }
+
+    #[inline]
+    fn get_once_mut(&self) -> &mut Once<T> {
+        unsafe { &mut *self.once.get() }
+    }
+
+    #[inline]
+    pub fn is_initialized(&self) -> bool {
+        self.get_once().get_state() == CallState::Completed
+    }
+
+    #[inline]
+    fn get_unchecked(&self) -> &T {
+        unsafe { &(*self.data.get()).value }
+    }
+
+    #[inline]
+    fn get_unchecked_mut(&self) -> &mut T {
+        unsafe { &mut (*self.data.get()).value }
     }
 
     #[inline]
     pub fn get(&self) -> Option<&T> {
-        let state = self.get_state();
-
-        match state {
-            INITIALIZED => unsafe { Some(&(*self.data.get()).value) },
-            _ => None,
+        if self.is_initialized() {
+            Some(self.get_unchecked())
+        } else {
+            None
         }
     }
 
     #[inline]
     pub fn get_mut(&mut self) -> Option<&mut T> {
-        let state = self.get_state();
-
-        match state {
-            INITIALIZED => unsafe { Some(&mut (*self.data.get()).value) },
-            _ => None,
+        if self.is_initialized() {
+            Some(self.get_unchecked_mut())
+        } else {
+            None
         }
     }
 
     pub fn force(this: &LazyLock<T, F>) -> &T {
-        let state = this.get_state();
+        let state = this.get_once().get_state();
 
         match state {
-            UNINIT => LazyLock::really_init(this),
-            INITIALIZING => this.force_wait(),
-            INITIALIZED => unsafe { &(*this.data.get()).value },
-            _ => panic!("invalid state value"),
+            CallState::Initial => LazyLock::really_init(this),
+            CallState::InProgress => this.force_wait(),
+            CallState::Completed => this.get_unchecked(),
+            _ => panic!("LazyLock is Poisoned"),
         }
     }
 
     fn really_init(this: &LazyLock<T, F>) -> &T {
-        if let Ok(_) = this.state.compare_exchange(
-            UNINIT,
-            INITIALIZING,
-            atomic::Ordering::SeqCst,
-            atomic::Ordering::Relaxed,
-        ) {
-            unsafe {
-                let data = &mut (*this.data.get());
+        let data = unsafe { &mut *this.data.get() };
+        let f = unsafe { ManuallyDrop::take(&mut data.f) };
 
-                let f = ManuallyDrop::take(&mut data.f);
-
-                let value = f();
-
-                (*this.data.get()).value = ManuallyDrop::new(value);
-
-                let _ = this.state.compare_exchange(
-                    INITIALIZING,
-                    INITIALIZED,
-                    atomic::Ordering::SeqCst,
-                    atomic::Ordering::Relaxed,
-                );
-
-                &(*this.data.get()).value
-            }
+        if let Some(mut value) = this.get_once().call_once(f) {
+            unsafe { &mut *this.data.get() }.value = ManuallyDrop::new(value.take());
+            this.get_unchecked()
         } else {
             this.force_wait()
         }
@@ -193,17 +194,13 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
     /// wait until the state becomes State::Initialized and return a valid `&T`
     pub fn force_wait(&self) -> &T {
         self.wait();
-
-        unsafe { &(*self.data.get()).value }
+        self.get_unchecked()
     }
 
     /// wait until the state becomes State::Initialized
+    #[inline]
     pub fn wait(&self) {
-        use core::arch::x86_64::_mm_pause;
-
-        while self.state.load(atomic::Ordering::Relaxed) != INITIALIZED {
-            unsafe { _mm_pause() };
-        }
+        self.get_once().wait();
     }
 
     /// # Synopsis
@@ -229,19 +226,19 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
     /// }
     /// ```
     pub fn drop(this: &LazyLock<T, F>) {
-        let state = this.get_state();
+        let state = this.get_once().get_state();
 
         let data = unsafe { &mut *this.data.get() };
 
         match state {
-            UNINIT => unsafe { ManuallyDrop::drop(&mut data.f) },
-            INITIALIZED => unsafe { ManuallyDrop::drop(&mut data.value) },
-            _ => panic!(),
+            CallState::Initial => unsafe { ManuallyDrop::drop(&mut data.f) },
+            CallState::Completed => unsafe { ManuallyDrop::drop(&mut data.value) },
+            _ => panic!("LazyLock in poisoned state"),
         }
 
         // Safety
         // we must ensure all the members be dropped in manually drop operation to prevent memory leaks
-        unsafe { drop_in_place(this.state.as_ptr()) };
+        unsafe { drop_in_place(this.get_once_mut()) };
     }
 }
 
@@ -254,11 +251,11 @@ impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
 
 impl<T, F> Drop for LazyLock<T, F> {
     fn drop(&mut self) {
-        match *self.state.get_mut() {
-            UNINIT => {
+        match unsafe { &*self.once.get() }.get_state() {
+            CallState::Initial => {
                 unsafe { ManuallyDrop::drop(&mut self.data.get_mut().f) };
             }
-            INITIALIZED => {
+            CallState::Completed => {
                 unsafe { ManuallyDrop::drop(&mut self.data.get_mut().value) };
             }
             _ => {}
@@ -511,39 +508,48 @@ unsafe impl<T: Sync> Sync for OnceCell<T> {}
 
 /// A synchronization primitive which can nominally be written to only once.
 pub struct OnceLock<T> {
-    state: AtomicU32,
+    // state: AtomicU32,
+    once: UnsafeCell<Once<T>>,
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
 impl<T> OnceLock<T> {
     pub const fn new() -> Self {
         Self {
-            state: AtomicU32::new(UNINIT),
+            once: UnsafeCell::new(Once::new()),
             value: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 
     #[inline]
     pub fn is_initialized(&self) -> bool {
-        self.state.load(Ordering::Relaxed) == INITIALIZED
+        self.get_once().get_state() == CallState::Completed
     }
 
     #[inline]
     pub fn get(&self) -> Option<&T> {
         if self.is_initialized() {
-            return Some(unsafe { (&*self.value.get()).assume_init_ref() });
+            Some(self.get_unchecked())
+        } else {
+            None
         }
+    }
 
-        None
+    fn get_unchecked(&self) -> &T {
+        unsafe { (&*self.value.get()).assume_init_ref() }
+    }
+
+    fn get_unchecked_mut(&self) -> &mut T {
+        unsafe { (&mut *self.value.get()).assume_init_mut() }
     }
 
     #[inline]
     pub fn get_mut(&mut self) -> Option<&mut T> {
         if self.is_initialized() {
-            return Some(unsafe { (&mut *self.value.get()).assume_init_mut() });
+            Some(self.get_unchecked_mut())
+        } else {
+            None
         }
-
-        None
     }
 
     /// set a value into underlying data
@@ -561,6 +567,14 @@ impl<T> OnceLock<T> {
         Ok(())
     }
 
+    fn get_once(&self) -> &Once<T> {
+        unsafe { &*self.once.get() }
+    }
+
+    fn get_once_mut(&self) -> &mut Once<T> {
+        unsafe { &mut *self.once.get() }
+    }
+
     /// get or initialize the underlying `T`
     ///
     /// return a reference to underlying `T` if it is already initialized, otherwise `None`
@@ -573,7 +587,7 @@ impl<T> OnceLock<T> {
         Some(self.init_once(f))
     }
 
-    /// take the ownership of inside `T`
+    /// take the ownership of inside value
     ///
     /// # Safety
     /// - the user must not use it again after calling `take`
@@ -581,7 +595,8 @@ impl<T> OnceLock<T> {
     #[inline]
     pub fn take(&mut self) -> Option<T> {
         if self.is_initialized() {
-            self.state = AtomicU32::new(UNINIT);
+            // change the state of once into `Poisoned`
+            self.once = UnsafeCell::new(Once::poisoned());
 
             unsafe { Some((&*self.value.get()).assume_init_read()) }
         } else {
@@ -591,25 +606,9 @@ impl<T> OnceLock<T> {
 
     /// ensure the inside `T` is initialized only once
     fn init_once<F: FnOnce() -> T>(&self, f: F) -> &T {
-        if let Ok(_) = self.state.compare_exchange(
-            UNINIT,
-            INITIALIZING,
-            atomic::Ordering::SeqCst,
-            atomic::Ordering::Relaxed,
-        ) {
-            let value = f();
-
-            unsafe { *self.value.get() = MaybeUninit::new(value) };
-
-            // make the inner value aviliable to others theads before they can see `state` changed from `INITIALIZING` or `UNINIT` to `INITIALIZED`
-            let _ = self.state.compare_exchange(
-                INITIALIZING,
-                INITIALIZED,
-                atomic::Ordering::SeqCst,
-                atomic::Ordering::Relaxed,
-            );
-
-            unsafe { (&*self.value.get()).assume_init_ref() }
+        if let Some(mut value) = self.get_once().call_once(f) {
+            unsafe { *self.value.get() = MaybeUninit::new(value.take()) };
+            self.get_unchecked()
         } else {
             self.wait()
         }
@@ -618,15 +617,9 @@ impl<T> OnceLock<T> {
     /// wait until the state becomes INITIALIZED and return an valid `&T`
     #[inline]
     pub fn wait(&self) -> &T {
-        use core::arch::x86_64::_mm_pause;
+        self.get_once().wait();
 
-        while !self.is_initialized() {
-            unsafe {
-                _mm_pause();
-            }
-        }
-
-        unsafe { (&*self.value.get()).assume_init_ref() }
+        self.get_unchecked()
     }
 
     /// associate method that can be used to drop a static `OnceLock` by just hold a immutable reference
@@ -654,13 +647,13 @@ impl<T> OnceLock<T> {
     #[inline]
     pub fn drop(this: &OnceLock<T>) {
         if this.is_initialized() {
+            // drop the underlying `T`
             unsafe {
-                ptr::drop_in_place(this.state.as_ptr());
-                
-                // drop the underlying `T`
                 (&mut *this.value.get()).assume_init_drop();
             }
         }
+
+        unsafe { ptr::drop_in_place(this.get_once_mut()) };
     }
 }
 

@@ -5,6 +5,7 @@
 
 pub mod utils;
 pub mod mutex;
+pub mod once;
 pub mod lazy;
 pub mod ntstatus;
 pub mod thread;
