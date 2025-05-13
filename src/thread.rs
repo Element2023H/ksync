@@ -234,7 +234,7 @@ pub mod this_thread {
         unsafe { _mm_pause() };
     }
 
-    pub fn id() -> ULONG {
+    pub fn id() -> u32 {
         unsafe { handle_to_ulong!(PsGetCurrentThreadId()) }
     }
 }
