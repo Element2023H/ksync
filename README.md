@@ -1,7 +1,7 @@
 # ksync
 EN | [中文](./README_CN.md)
 
-rust wrappers for kernel mode thread, Lazy & Cell, FastMutex, GuardMutex, Resources and Queued Spin Locks
+rust wrappers for kernel mode Process & Thread, Lazy & Cell, FastMutex, GuardMutex, Resources, Queued Spin Locks, Event, DPC, Semaphore, Timer
 # Features
 ## Threads
 ```

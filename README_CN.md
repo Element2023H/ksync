@@ -1,8 +1,9 @@
 # ksync
 中文 | [EN](./README.md)
 
-使用Rust包装Windows内核态的 thread, FastMutex, GuardMutex, Resources and Queued Spin Locks
-# 特色
+使用Rust包装Windows内核态的 进程，线程, FastMutex, GuardMutex, Resources, 队列自旋锁，事件，信号量，DPC，DPC定时器
+
+# 功能
 ## Threads
 ```
 // create a joinable system thread
