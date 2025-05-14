@@ -1,11 +1,12 @@
 use core::mem::MaybeUninit;
+use core::num::NonZero;
 use core::ops::{Deref, DerefMut};
 use core::{mem, ptr};
 
 use alloc::boxed::Box;
 use wdk::nt_success;
 use wdk_sys::LARGE_INTEGER;
-use wdk_sys::ntddk::ObfDereferenceObject;
+use wdk_sys::ntddk::{KeQueryActiveProcessorCount, ObfDereferenceObject};
 use wdk_sys::{
     _KWAIT_REASON::Executive,
     _MODE::KernelMode,
@@ -171,6 +172,12 @@ extern "C" fn start_routine_stub<F: FnOnce()>(context: PVOID) {
     let ctx: Box<F> = unsafe { Box::from_raw(mem::transmute::<_, *mut F>(context)) };
 
     ctx();
+}
+
+pub fn available_parallelism() -> NonZero<usize> {
+    let num_cores = unsafe { KeQueryActiveProcessorCount(ptr::null_mut()) };
+
+    NonZero::new(num_cores as usize).unwrap()
 }
 
 pub fn spawn<F: FnOnce() + Send + 'static>(f: F) -> Result<JoinHandle, NtError> {
