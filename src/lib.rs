@@ -6,6 +6,12 @@
 pub mod utils;
 pub mod mutex;
 pub mod once;
+pub mod handle;
+pub mod dpc;
+pub mod event;
+pub mod timer;
+pub mod kobject;
+pub mod semaphore;
 pub mod lazy;
 pub mod ntstatus;
 pub mod thread;
@@ -15,6 +21,8 @@ pub mod lock;
 
 mod constants;
 pub(crate) use constants::*;
+
+pub(crate) mod raw;
 
 extern crate alloc;
 
