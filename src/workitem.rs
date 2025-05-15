@@ -1,8 +1,7 @@
-use core::{cell::UnsafeCell, mem, ptr};
+use core::{mem, ptr};
 
 use alloc::boxed::Box;
 use wdk_sys::{
-    _POOL_TYPE::NonPagedPoolNx,
     _WORK_QUEUE_TYPE::DelayedWorkQueue,
     PDEVICE_OBJECT, PIO_WORKITEM, PVOID, STATUS_INSUFFICIENT_RESOURCES,
     ntddk::{IoAllocateWorkItem, IoFreeWorkItem, IoQueueWorkItemEx},
@@ -101,7 +100,7 @@ extern "C" fn worker_routine_oneshot_stub<F: FnOnce()>(
 /// ```
 /// Box will try to free whatever inside as a type of `dyn Fn()` thus free the `callback` registered in `WorkItem::new()`.
 /// that will cause double-free bug here, since the owned type `WorkItem` also stores a copy of `callback`.
-/// 
+///
 /// # The Internals - How Box construct and destruct the *dyn* type
 /// ## Construction
 /// `Box` construct the `dyn T` using the following two steps
@@ -112,7 +111,7 @@ extern "C" fn worker_routine_oneshot_stub<F: FnOnce()>(
 /// this happens will a `Box` goes out of its scope means `drop` of `Box` will be called, this has two steps
 /// - `Box` extract second part the `vtable` pointer and find a `drop` method in it, then call it with first part pointer of `T`, like this: `drop(self)`
 /// - finally `Box` will try to free the memory of `T` occupied
-/// 
+///
 /// # NoteWorthy
 /// - the drop progress of a `Box` may changed depends on `T`, as we can see a `dyn` type is "special" in construction / destruction of a `Box`.
 /// non-dyn types are easy to construct & destruct

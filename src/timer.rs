@@ -1,6 +1,5 @@
 use core::{
     mem,
-    num::{NonZero, NonZeroU32},
     ptr,
     time::Duration,
 };
@@ -10,7 +9,7 @@ use wdk_sys::{
     _EX_TIMER, _KDPC, _KTIMER,
     _POOL_TYPE::NonPagedPoolNx,
     _TIMER_TYPE::{NotificationTimer, SynchronizationTimer},
-    EX_TIMER_HIGH_RESOLUTION, EXT_CALLBACK, EXT_DELETE_PARAMETERS, KTIMER, LARGE_INTEGER,
+    EX_TIMER_HIGH_RESOLUTION, EXT_DELETE_PARAMETERS, KTIMER, LARGE_INTEGER,
     PEX_TIMER, PEXT_CALLBACK, PKTIMER, PVOID, STATUS_INSUFFICIENT_RESOURCES,
     ntddk::{
         ExAllocateTimer, ExCancelTimer, ExDeleteTimer, ExFreePoolWithTag, ExSetTimer,
