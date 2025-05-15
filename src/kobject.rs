@@ -19,7 +19,7 @@ use wdk_sys::{
 
 use crate::{
     handle::ObjectHandle,
-    ntstatus::{cvt, NtError},
+    ntstatus::{NtError, cvt},
     raw::{AsRawHandle, AsRawObject},
 };
 
@@ -283,21 +283,3 @@ impl<T> Drop for KernelObject<T> {
 
 pub type ProcessObject = KernelObject<_KPROCESS>;
 pub type ThreadObject = KernelObject<_KTHREAD>;
-
-pub mod test {
-    use wdk::println;
-
-    use crate::ulong_to_handle;
-
-    use super::*;
-
-    pub fn test_kobject() {
-        if let Ok(process) = ProcessObject::from_process_id(ulong_to_handle!(4368)) {
-            println!("get process: {:p}", process.as_raw());
-        }
-
-        if let Ok(thread) = ThreadObject::from_thread_id(ulong_to_handle!(4372)) {
-            println!("get thread: {:p}", thread.as_raw());
-        }
-    }
-}
