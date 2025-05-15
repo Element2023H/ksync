@@ -15,6 +15,7 @@ pub mod semaphore;
 pub mod thread;
 pub mod timer;
 pub mod utils;
+pub mod workitem;
 
 #[deprecated(since = "0.1.1", note = "please use `mutex` instead")]
 pub mod lock;
