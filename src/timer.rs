@@ -1,12 +1,21 @@
-use core::{mem, time::Duration};
+use core::{
+    mem,
+    num::{NonZero, NonZeroU32},
+    ptr,
+    time::Duration,
+};
 
+use alloc::boxed::Box;
 use wdk_sys::{
-    _KTIMER,
+    _EX_TIMER, _KDPC, _KTIMER,
     _POOL_TYPE::NonPagedPoolNx,
     _TIMER_TYPE::{NotificationTimer, SynchronizationTimer},
-    KTIMER, LARGE_INTEGER, PKTIMER, STATUS_INSUFFICIENT_RESOURCES,
+    EX_TIMER_HIGH_RESOLUTION, EXT_CALLBACK, EXT_DELETE_PARAMETERS, KTIMER, LARGE_INTEGER,
+    PEX_TIMER, PEXT_CALLBACK, PKTIMER, PVOID, STATUS_INSUFFICIENT_RESOURCES,
     ntddk::{
-        ExFreePoolWithTag, KeCancelTimer, KeInitializeTimerEx, KeReadStateTimer, KeSetTimerEx,
+        ExAllocateTimer, ExCancelTimer, ExDeleteTimer, ExFreePoolWithTag, ExSetTimer,
+        ExSetTimerResolution, KeCancelTimer, KeInitializeDpc, KeInitializeTimerEx,
+        KeReadStateTimer, KeSetTimerEx,
     },
 };
 
@@ -16,6 +25,17 @@ use crate::{
 };
 
 const TIMER_TAG: u32 = u32::from_ne_bytes(*b"rimt");
+
+/// run a task only once after some duration
+///
+/// run and "forget", manage memory automatically, usefull when using a one-shot-forget timer as a delayed task
+/// # Parameter
+/// - after: task will be run after amount of time specified, a `Duraton::ZERO` indicate the task will be started it immediately
+/// # Note
+/// depends on the implement context, the `f` will be dispatched on different IRQL
+pub trait DelayRun {
+    fn delay_run<F: Fn() + 'static>(f: F, after: Duration) -> Result<(), NtError>;
+}
 
 pub struct Timer {
     inner: PKTIMER,
@@ -27,7 +47,7 @@ impl Timer {
     ///
     /// # Parameters
     /// - f: routine will be called when timer expired
-    /// - is_synch: specify the type of timer, NotificationTimer or SynchronizationTimer this method will create
+    /// - is_synch: specify the type of timer, NotificationTimer or SynchronizationTimer will be created
     pub fn new<F: Fn() + 'static>(f: F, is_synch: bool) -> Result<Self, NtError> {
         let layout =
             ex_allocate_pool_zero(NonPagedPoolNx, mem::size_of::<KTIMER>() as _, TIMER_TAG);
@@ -59,11 +79,11 @@ impl Timer {
 
     /// start this timer
     /// # Parameters
-    /// - after: start this timer after `after` period
-    /// - period: specify how long the timer will expires
+    /// - after: start this timer after amount of time, the timer will expired immdediately if a `Duration::ZERO` specified
+    /// - period: timer expire period, the timer will not expire periodically if sepcify `Duration::ZERO` which means a one-shot timer
     pub fn start(&self, after: Duration, period: Duration) {
         let due_time = LARGE_INTEGER {
-            QuadPart: after.as_millis() as _,
+            QuadPart: -1 * after.as_millis() as i64 * 1_0000,
         };
 
         unsafe {
@@ -93,6 +113,62 @@ impl AsRawObject for Timer {
 
 impl Dispatchable for Timer {}
 
+struct OneShotContex<F> {
+    callback: Box<F>,
+    timer: Box<_KTIMER>,
+}
+
+extern "C" fn oneshot_dpc_routine<F: Fn()>(
+    pDpc: *mut _KDPC,
+    DeferredContext: PVOID,
+    SystemArgument1: PVOID,
+    SystemArgument2: PVOID,
+) {
+    let context = unsafe { Box::from_raw(DeferredContext as *mut OneShotContex<F>) };
+
+    (context.callback)();
+
+    // free the DPC
+    let _ = unsafe { Box::from_raw(pDpc) };
+
+    // free all items in context
+}
+
+impl DelayRun for Timer {
+    fn delay_run<F: Fn() + 'static>(f: F, after: Duration) -> Result<(), NtError> {
+        let mut dpc = Box::new(_KDPC::default());
+
+        // allocate DPC context
+        let mut context = Box::new(OneShotContex {
+            callback: Box::new(f),
+            timer: Box::new(_KTIMER::default()),
+        });
+
+        unsafe {
+            KeInitializeDpc(
+                dpc.as_mut(),
+                Some(oneshot_dpc_routine::<F>),
+                context.as_mut() as *mut _ as _,
+            );
+
+            KeInitializeTimerEx(context.timer.as_mut(), NotificationTimer);
+        }
+
+        let due_time = LARGE_INTEGER {
+            QuadPart: -1 * after.as_millis() as i64 * 1_0000,
+        };
+
+        unsafe {
+            KeSetTimerEx(context.timer.as_mut(), due_time, 0, dpc.as_mut());
+        }
+
+        let _ = Box::leak(dpc);
+        let _ = Box::leak(context);
+
+        Ok(())
+    }
+}
+
 impl Drop for Timer {
     fn drop(&mut self) {
         unsafe {
@@ -103,3 +179,137 @@ impl Drop for Timer {
 
 unsafe impl Send for Timer {}
 unsafe impl Sync for Timer {}
+
+/// A High Resolution Timer
+///
+/// # Note
+/// before create timer that expired in 1ms, please adjust the system time tick resolutio first by calling `set_timer_resolution`
+///
+/// # Refer
+/// see https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exsettimer for details
+pub struct HRTimer(PEX_TIMER);
+
+impl HRTimer {
+    /// create a high resolution timer with or without a callback
+    ///
+    /// if a timer is created without callback, it will also satisfy the thread who waits on it to be signaled
+    pub fn new<F: Fn() + 'static>(f: Option<F>) -> Result<Self, NtError> {
+        let mut callback_stub: PEXT_CALLBACK = None;
+        let mut callback: *mut F = ptr::null_mut();
+
+        if f.is_some() {
+            callback = Box::into_raw(Box::new(f.unwrap()));
+            callback_stub = Some(hr_timer_routine_stub::<F>);
+        }
+
+        let timer =
+            unsafe { ExAllocateTimer(callback_stub, callback as _, EX_TIMER_HIGH_RESOLUTION) };
+
+        Ok(Self(timer))
+    }
+
+    /// start this timer
+    /// # Parameter
+    /// All the same as `Timer::start`
+    pub fn start(&self, after: Duration, period: Duration) {
+        unsafe {
+            ExSetTimer(
+                self.0,
+                -1 * after.as_millis() as i64 * 1_0000,
+                (period.as_micros() * 10) as _,
+                ptr::null_mut(),
+            );
+        }
+    }
+
+    /// stop this timer
+    pub fn stop(&self) {
+        unsafe {
+            ExCancelTimer(self.0, ptr::null_mut());
+        };
+    }
+}
+
+impl AsRawObject for HRTimer {
+    type Target = _EX_TIMER;
+    fn as_raw(&self) -> *mut Self::Target {
+        self.0
+    }
+}
+
+impl Dispatchable for HRTimer {}
+
+/// callback run only once on DISPATCH_LEVEL
+extern "C" fn hr_timer_routine_once_stub<F: FnOnce()>(timer: PEX_TIMER, context: PVOID) {
+    let callback = unsafe { Box::from_raw(mem::transmute::<_, *mut F>(context)) };
+
+    callback();
+
+    let mut param = EXT_DELETE_PARAMETERS::default();
+
+    unsafe { ExDeleteTimer(timer.cast(), 0, 0, &mut param) };
+}
+
+impl DelayRun for HRTimer {
+    fn delay_run<F: FnOnce() + 'static>(f: F, after: Duration) -> Result<(), NtError> {
+        let callback = Box::into_raw(Box::new(f));
+
+        let timer = unsafe {
+            ExAllocateTimer(
+                Some(hr_timer_routine_once_stub::<F>),
+                callback as _,
+                EX_TIMER_HIGH_RESOLUTION,
+            )
+        };
+
+        unsafe {
+            ExSetTimer(
+                timer,
+                -1 * after.as_millis() as i64 * 1_0000,
+                0,
+                ptr::null_mut(),
+            );
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for HRTimer {
+    fn drop(&mut self) {
+        unsafe {
+            // stop and delete the timer
+            let mut param = EXT_DELETE_PARAMETERS::default();
+
+            ExDeleteTimer(self.0, 1, 1, &mut param);
+        }
+    }
+}
+
+/// callback run periodically on DISPATCH_LEVEL
+extern "C" fn hr_timer_routine_stub<F: Fn()>(timer: PEX_TIMER, context: PVOID) {
+    let callback = unsafe { Box::from_raw(mem::transmute::<_, *mut F>(context)) };
+
+    callback();
+}
+
+/// adjust the system wide time tick resolution
+/// # Note
+///
+/// the system tiemr resolution must be restored after call `set_resolution`
+///
+/// see https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exsettimerresolution for details
+#[inline]
+pub fn set_timer_resolution(res: Duration) -> Duration {
+    Duration::from_nanos(
+        (unsafe { ExSetTimerResolution(res.as_nanos() as u32 / 100, 1) } * 100) as u64,
+    )
+}
+
+/// restore the system wide time tick resolution to default value
+#[inline]
+pub fn resotre_timer_resolution() {
+    unsafe {
+        ExSetTimerResolution(0, 0);
+    }
+}
