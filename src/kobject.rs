@@ -111,12 +111,25 @@ pub trait Dereference: AsRawObject {
 pub struct KernelObject<T>(*mut T);
 
 impl<T> KernelObject<T> {
-    pub fn is_valid(&self) -> bool {
-        self.0 != ptr::null_mut()
+    /// inner value should not be null
+    pub fn new(value: *mut T) -> Option<Self> {
+        if value.is_null() {
+            None
+        } else {
+            Some(Self(value))
+        }
     }
 
-    pub fn get(&self) -> *mut T {
+    pub fn as_ptr(&self) -> *mut T {
         self.0
+    }
+
+    pub fn as_ref(&self) -> &T {
+        unsafe { &*self.0 }
+    }
+
+    pub fn as_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.0 }
     }
 }
 
@@ -265,13 +278,6 @@ impl<T> FromOwnedHandle for KernelObject<T> {
         cvt(status)?;
 
         Ok(KernelObject(object.cast()))
-    }
-}
-
-impl<T> Deref for KernelObject<T> {
-    type Target = *mut T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

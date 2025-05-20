@@ -24,11 +24,11 @@ extern crate alloc;
 
 pub fn test_kobject() {
     if let Ok(process) = ProcessObject::from_process_id(ulong_to_handle!(4368)) {
-        println!("get process: {:p}", process.get());
+        println!("get process: {:p}", process.as_ptr());
     }
 
     if let Ok(thread) = ThreadObject::from_thread_id(ulong_to_handle!(4372)) {
-        println!("get thread: {:p}", thread.get());
+        println!("get thread: {:p}", thread.as_ptr());
     }
 }
 
