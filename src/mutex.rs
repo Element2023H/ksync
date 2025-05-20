@@ -342,6 +342,7 @@ struct InnerData<T, M: Mutex> {
 /// let shared_counter = FastLocked::new(0u32).unwrap();
 /// println!("counter = {}", *shared_counter);
 /// ```
+#[repr(transparent)]
 pub struct Locked<T, M>
 where
     M: Mutex,
@@ -594,6 +595,7 @@ struct QueuedInnerData<T, M: QueuedMutex> {
 ///     *counter += 1;
 /// }
 /// ```
+#[repr(transparent)]
 pub struct StackQueueLocked<T, M: QueuedMutex> {
     inner: NonNull<QueuedInnerData<T, M>>,
 }
