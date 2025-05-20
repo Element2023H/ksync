@@ -18,6 +18,7 @@ pub mod utils;
 pub mod workitem;
 
 // just for testing purpose
+#[cfg(test)]
 pub mod test;
 
 #[deprecated(since = "0.1.1", note = "please use `mutex` instead")]
