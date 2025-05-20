@@ -12,7 +12,7 @@ pub mod lazy;
 pub mod mutex;
 pub mod ntstatus;
 pub mod once;
-pub mod semaphore;
+pub mod sema;
 pub mod thread;
 pub mod timer;
 pub mod utils;

@@ -16,7 +16,7 @@ use super::dpc::{self};
 use super::event::*;
 use super::kobject::*;
 use super::mutex::*;
-use super::semaphore::*;
+use super::sema::*;
 use super::thread::*;
 use super::timer::*;
 
