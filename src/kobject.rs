@@ -98,11 +98,7 @@ pub trait Dereference: AsRawObject {
     fn release(&mut self) {
         let ptr = <Self as AsRawObject>::as_raw(self);
 
-        unsafe {
-            if !ptr.is_null() {
-                ObfDereferenceObject(ptr.cast());
-            }
-        }
+        unsafe { ObfDereferenceObject(ptr.cast()); }
     }
 }
 
