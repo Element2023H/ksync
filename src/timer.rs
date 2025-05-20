@@ -10,7 +10,7 @@ use wdk_sys::{
 };
 
 use crate::{
-    dpc::Dpc, kobject::Dispatchable, mutex::ex_allocate_pool_zero, ntstatus::NtError,
+    dpc::Dpc, kobject::Dispatchable, utils::ex_allocate_pool_zero, ntstatus::NtError,
     raw::AsRawObject,
 };
 

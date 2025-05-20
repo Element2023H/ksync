@@ -11,7 +11,7 @@ use wdk_sys::{
 };
 
 use crate::{
-    kobject::Dispatchable, mutex::ex_allocate_pool_zero, ntstatus::NtError, raw::AsRawObject,
+    kobject::Dispatchable, ntstatus::NtError, raw::AsRawObject, utils::ex_allocate_pool_zero,
 };
 
 /// A kernel mode synchronous Event

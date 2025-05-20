@@ -1,4 +1,4 @@
-use crate::ntstatus::{NtError, cvt};
+use crate::{ntstatus::{cvt, NtError}, utils::ex_allocate_pool_zero};
 use core::{
     cell::UnsafeCell,
     fmt::{Debug, Display},
@@ -34,30 +34,6 @@ fn ExInitializeFastMutex(fast_mutex: *mut FAST_MUTEX) {
         KeInitializeEvent(&mut (*fast_mutex).Event, SynchronizationEvent, FALSE as _)
     }
 }
-
-// out of fashion api collections
-// TODO: move it out of this module
-mod otf {
-    use wdk_sys::POOL_TYPE;
-
-    use super::*;
-
-    unsafe extern "C" {
-        pub fn ExAllocatePoolWithTag(pool_type: POOL_TYPE, size: SIZE_T, tag: ULONG) -> PVOID;
-    }
-
-    pub fn ex_allocate_pool_zero(pool_type: POOL_TYPE, size: SIZE_T, tag: ULONG) -> PVOID {
-        let ptr = unsafe { ExAllocatePoolWithTag(pool_type, size, tag) };
-
-        if !ptr.is_null() {
-            unsafe { memset(ptr, 0, size) };
-        }
-
-        ptr
-    }
-}
-
-pub use otf::ex_allocate_pool_zero;
 
 const MUTEX_TAG: ULONG = u32::from_ne_bytes(*b"xetm");
 

@@ -11,9 +11,8 @@ use wdk_sys::{
 
 use crate::{
     kobject::{Dispatchable, WaitResult},
-    mutex::ex_allocate_pool_zero,
     ntstatus::NtError,
-    raw::AsRawObject,
+    raw::AsRawObject, utils::ex_allocate_pool_zero,
 };
 
 const SEMA_TAG: u32 = u32::from_ne_bytes(*b"ames");

@@ -14,7 +14,7 @@ use wdk_sys::{
     },
 };
 
-use crate::{mutex::ex_allocate_pool_zero, ntstatus::NtError};
+use crate::{utils::ex_allocate_pool_zero, ntstatus::NtError};
 
 const DPC_TAG: u32 = u32::from_ne_bytes(*b"cpdk");
 
