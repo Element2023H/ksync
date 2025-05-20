@@ -5,7 +5,7 @@
 //! while `LazyCell` and `LazyLock` can not
 //!
 //! they are all implemented with an associate `drop` method can be used to drop only once
-//!
+//! 
 //! - `OnceCell`</br>
 //! delayed initiazation out of construction
 //! can be initialized only once in single thread</br>
@@ -535,10 +535,12 @@ impl<T> OnceLock<T> {
         }
     }
 
+    #[inline]
     fn get_unchecked(&self) -> &T {
         unsafe { (&*self.value.get()).assume_init_ref() }
     }
 
+    #[inline]
     fn get_unchecked_mut(&self) -> &mut T {
         unsafe { (&mut *self.value.get()).assume_init_mut() }
     }
@@ -567,10 +569,12 @@ impl<T> OnceLock<T> {
         Ok(())
     }
 
+    #[inline]
     fn get_once(&self) -> &Once<T> {
         unsafe { &*self.once.get() }
     }
 
+    #[inline]
     fn get_once_mut(&self) -> &mut Once<T> {
         unsafe { &mut *self.once.get() }
     }
@@ -604,6 +608,7 @@ impl<T> OnceLock<T> {
         }
     }
 
+    #[inline]
     /// ensure the inside `T` is initialized only once
     fn init_once<F: FnOnce() -> T>(&self, f: F) -> &T {
         if let Some(mut value) = self.get_once().call_once(f) {
@@ -665,5 +670,4 @@ impl<T> Drop for OnceLock<T> {
     }
 }
 
-// unsafe impl<T> Send for OnceLock<T> {}
 unsafe impl<T: Sync> Sync for OnceLock<T> {}
