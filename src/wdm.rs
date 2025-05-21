@@ -4,18 +4,19 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use crate::{
     kobject::KernelObject,
-    ntstatus::{cvt, NtError}, utils,
+    ntstatus::{NtError, cvt},
+    utils,
 };
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 
 use wdk::nt_success;
 use wdk_sys::{
-    _DEVICE_OBJECT, _DRIVER_OBJECT, DEVICE_OBJECT, DRIVER_OBJECT,
+    _DEVICE_OBJECT, _DRIVER_OBJECT, _UNICODE_STRING, DEVICE_OBJECT, DRIVER_OBJECT,
     FILE_DEVICE_SECURE_OPEN, FILE_DEVICE_UNKNOWN, FILE_READ_DATA, IO_NO_INCREMENT,
     IRP_MJ_MAXIMUM_FUNCTION, LIST_ENTRY, NTSTATUS, PDEVICE_OBJECT, PDRIVER_OBJECT, PFILE_OBJECT,
-    PIRP, STATUS_DEVICE_ALREADY_ATTACHED, STATUS_INSUFFICIENT_RESOURCES,
+    PIRP, PUNICODE_STRING, STATUS_DEVICE_ALREADY_ATTACHED, STATUS_INSUFFICIENT_RESOURCES,
     STATUS_INVALID_PARAMETER_2, STATUS_NOT_FOUND, STATUS_NOT_IMPLEMENTED, STATUS_PENDING,
     STATUS_SUCCESS, UNICODE_STRING,
     ntddk::{
@@ -51,6 +52,68 @@ pub struct KLDR_DATA_TABLE_ENTRY {
 
 #[allow(non_camel_case_types)]
 pub type PKLDR_DATA_TABLE_ENTRY = *mut KLDR_DATA_TABLE_ENTRY;
+
+pub struct DeviceProperty<'a> {
+    dev_type: u32,
+    dev_characteristics: u32,
+    dev_name: Option<&'a str>,
+    dev_symbol_name: Option<&'a str>,
+}
+
+impl<'a> DeviceProperty<'a> {
+    pub fn new() -> Self {
+        Self {
+            dev_type: FILE_DEVICE_UNKNOWN,
+            dev_characteristics: FILE_DEVICE_SECURE_OPEN,
+            dev_name: None,
+            dev_symbol_name: None,
+        }
+    }
+
+    pub fn get_type(&self) -> u32 {
+        self.dev_type
+    }
+
+    pub fn get_characteristics(&self) -> u32 {
+        self.dev_type
+    }
+
+    pub fn get_dev_name(&self) -> Option<&'a str> {
+        self.dev_name
+    }
+
+    pub fn get_dev_symbol_name(&self) -> Option<&'a str> {
+        self.dev_symbol_name
+    }
+
+    pub fn set_type(mut self, r#type: u32) -> Self {
+        self.dev_type = r#type;
+        self
+    }
+
+    pub fn set_characteristics(mut self, characteristics: u32) -> Self {
+        self.dev_characteristics = characteristics;
+        self
+    }
+
+    pub fn set_name(mut self, name: &'a str) -> Self {
+        self.dev_name = Some(name);
+        self
+    }
+
+    pub fn set_symbol_name(mut self, symbol_name: &'a str) -> Self {
+        self.dev_symbol_name = Some(symbol_name);
+        self
+    }
+
+    pub fn new_device(
+        self,
+        driver: &mut Driver,
+        dispatch_handler: Option<Box<dyn IrpDispatch>>,
+    ) -> Result<&mut OwnedDevice, NtError> {
+        driver.create_device(self, dispatch_handler)
+    }
+}
 
 /// A type act as IRP Dispatch handler that handle IRP request in device's own "Device Stack Frame"
 ///
@@ -137,9 +200,10 @@ impl Driver {
 
     pub fn create_device(
         &mut self,
+        property: DeviceProperty,
         dispatch_handler: Option<Box<dyn IrpDispatch>>,
     ) -> Result<&mut OwnedDevice, NtError> {
-        let dev = OwnedDevice::new(self, dispatch_handler)?;
+        let dev = OwnedDevice::new(self, property, dispatch_handler)?;
 
         self.devices.push(dev);
 
@@ -148,6 +212,7 @@ impl Driver {
             .ok_or(NtError::new(STATUS_NOT_FOUND))
     }
 
+    #[deprecated(since = "0.1.4", note = "please use `Driver::create_device` instead")]
     pub fn create_device_with_name(
         &mut self,
         name: &str,
@@ -198,27 +263,40 @@ pub struct OwnedDevice {
 }
 
 impl OwnedDevice {
-    /// create a default device with no name
+    /// create a default device with `DeviceProperty`
     ///
     /// Device Extension is created when `dispatch_object` is specified
     pub fn new(
         driver: &Driver,
+        property: DeviceProperty,
         dispatch_handler: Option<Box<dyn IrpDispatch>>,
     ) -> Result<Self, NtError> {
         let mut device: PDEVICE_OBJECT = ptr::null_mut();
         let mut ext_size = 0u32;
+        let mut dev_name: Option<Box<_UNICODE_STRING>> = None;
 
         if dispatch_handler.is_some() {
             ext_size = mem::size_of::<DispatchContext>() as _;
         }
 
-        let status = unsafe {
+        if let Some(name) = property.get_dev_name() {
+            dev_name = Some(
+                utils::utf16_from_str(("\\Device\\".to_owned() + name).as_str())
+                    .ok_or(NtError::new(STATUS_INSUFFICIENT_RESOURCES))?,
+            );
+        }
+
+        let mut status = unsafe {
             IoCreateDevice(
                 driver.as_raw(),
                 ext_size,
-                ptr::null_mut(),
-                FILE_DEVICE_UNKNOWN,
-                FILE_DEVICE_SECURE_OPEN,
+                if dev_name.is_some() {
+                    dev_name.as_mut().unwrap().as_mut()
+                } else {
+                    ptr::null_mut()
+                },
+                property.get_type(),
+                property.get_characteristics(),
                 0,
                 &mut device,
             )
@@ -226,29 +304,50 @@ impl OwnedDevice {
 
         cvt(status)?;
 
+        let mut device_dos_name: Option<Box<UNICODE_STRING>> = None;
+
+        if let Some(name) = property.get_dev_symbol_name() {
+            if let Some(ref mut name2) = dev_name {
+                let mut sym_name: Box<_UNICODE_STRING> =
+                    utils::utf16_from_str(("\\DosDevices\\".to_owned() + name).as_str())
+                        .ok_or(NtError::new(STATUS_INSUFFICIENT_RESOURCES))?;
+
+                status = unsafe { IoCreateSymbolicLink(sym_name.as_mut(), name2.as_mut()) };
+
+                if !nt_success(status) {
+                    unsafe {
+                        IoDeleteDevice(device);
+                    }
+                    return Err(NtError::new(status));
+                }
+
+                device_dos_name = Some(sym_name);
+            }
+        }
+
         let mut dispatch_object: Option<Box<dyn IrpDispatch>> = None;
 
         // A `dyn` type in Rust is a DST type for dynamic dispatch
-        // a `dyn xxx` is essentially different from a `&dyn xxx`, there are just as `T` and `&T`
+        // a `dyn xxx` is essentially different from a `&dyn xxx`, they are just explained as `T` and `&T`
         // but a `&dyn` type has a fixed size of 16 bytes long, it is a "fat pointer" consist of two parts:
         // 1)the high part is a pointer point to the object that allocated in the heap
         // 2)the low part if a pointer  point to the `vtable` of the object in the 'rdata' section of image
         // both is guaranteed residence in memory by `Box`, so we could safely use it for dynamic dispatch
         // and that's why the `&dyn xxx` is not "compatible" with native raw pointers, but we can store a '&dyn xxx' into memory of a raw pointer
         //
-        // when we want a Box<dyn xxx> by calling Box<dyn xxx>::new(T), the following things will happen:
+        // when we initialize a Box<dyn xxx> by calling Box<dyn xxx>::new(T), the following two things will happen:
         // 1) the Box will allocate `T` from heap and store its address(8 bytes on x64) in high part of "fat pointer"
         // 2) the Box will store the `vtable` of `T` in low part of "fat pointer"
         //
         // here we perform to copy a `&dyn IrpDispatch` into `DeviceExtension` and then take the ownership of the dispatch handler
         // the dispatch handler lives as long as this device object, the user must ensure this device object lives longer than the `irp_dispatch_stub`
         // upon we get a `&dyn IrpDispatch` from a Box, it extract the address of "fat pointer" directly for us which is 8 bytes on x64(sizeof(void*))
-        // thus we can safely transfer it to native structures for future dispatch
+        // thus we can safely transfer it to native API for dynamic dispatch
         if let Some(mut value) = dispatch_handler {
             // copy the "fat pointer" from Box into device extension
             // `Box::as_mut()` will return a "fat pointer" separated by [rax:rdx] which will be efficiently stored on the stack
             // and then copied into device extension by us, as u may guessed, `ptr::write` here will use three registers(rcx, rdx, r8) as its arguments
-            // since the return value of `Box::as_mut()` take 16 bytes(passed by [rdx:r8])
+            // since the return value of `value.as_mut()` take 16 bytes(passed in as [rdx, r8])
             unsafe {
                 ptr::write(
                     (*device).DeviceExtension.cast(),
@@ -262,14 +361,15 @@ impl OwnedDevice {
         }
 
         Ok(Self {
-            name: None,
-            symbol_name: None,
+            name: dev_name,
+            symbol_name: device_dos_name,
             object: NonNull::new(device).unwrap(),
             dispatch_object,
         })
     }
 
     /// create a named device in namespace `\Device\`
+    #[deprecated(since = "0.1.4", note = "please use `OwnedDevice::new` instead")]
     pub fn with_name(
         driver: &Driver,
         name: &str,
